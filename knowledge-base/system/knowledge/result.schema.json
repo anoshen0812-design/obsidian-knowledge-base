@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "status", "primary_file", "updated_files", "warnings"],
+  "properties": {
+    "operation": {
+      "type": "string",
+      "enum": ["ingest", "integrate", "lint"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["drafted", "integrated", "reported", "blocked"]
+    },
+    "primary_file": {
+      "type": "string"
+    },
+    "updated_files": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "pdf-selection-translator",
+  "name": "PDF Selection Translator",
+  "version": "0.3.0",
+  "minAppVersion": "1.11.4",
+  "description": "Translate selected PDF text with Qwen-MT through Alibaba Cloud Model Studio.",
+  "author": "Obsidian Knowledge Base contributors",
+  "isDesktopOnly": true
+}

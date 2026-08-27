@@ -1,0 +1,8 @@
+{
+  "api_base": "http://localhost:23119/api",
+  "collection_key": "",
+  "collection_name": "Doc",
+  "literature_dir": "sources/literature",
+  "vault_path": "/path/to/your/obsidian-vault"
+}
+

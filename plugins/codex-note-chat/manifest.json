@@ -1,0 +1,9 @@
+{
+  "id": "codex-note-chat",
+  "name": "Codex Note Chat",
+  "version": "0.2.0",
+  "minAppVersion": "1.6.0",
+  "description": "Ask Codex about the active note and its source PDF from a movable, read-only chat window.",
+  "author": "Local",
+  "isDesktopOnly": true
+}

@@ -1,0 +1,26 @@
+{
+  "name": "obsidian-pdf-selection-translator",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Translate selected PDF text beside the selection in Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "check": "tsc --noEmit --skipLibCheck"
+  },
+  "keywords": [
+    "obsidian",
+    "pdf",
+    "translation",
+    "qwen"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "esbuild": "^0.25.5",
+    "obsidian": "^1.13.1",
+    "typescript": "^5.8.3"
+  },
+  "packageManager": "pnpm@11.19.0"
+}

@@ -1,0 +1,31 @@
+.DS_Store
+node_modules/
+__pycache__/
+*.py[cod]
+
+# Personal/local configuration and plugin state
+**/config.json
+**/data.json
+**/state.json
+**/pending.json
+.claudian/
+
+# Runtime output
+**/*.log
+**/logs/
+**/runtime/
+**/reports/
+system/ingest-log.md
+system/lint-log.md
+
+# User content and generated knowledge
+sources/
+extracts/
+wiki/
+笔记/
+*.pdf
+*.bib
+
+# Obsidian workspace state
+.obsidian/workspace*.json
+.obsidian/cache/

@@ -46,3 +46,18 @@ python3 scripts/install-paperforge-skills.py
 ```
 
 PaperForge 由其上游作者维护：<https://github.com/FeijiangHan/PaperForge>。安装与使用上游文件时请遵守上游仓库的条款。
+
+## 致谢与引用
+
+`paperforge` 分支的论文深度阅读流程基于 Feijiang Han 维护的 [PaperForge](https://github.com/FeijiangHan/PaperForge)。如果在研究或项目中使用该分支，请同时引用上游项目：
+
+> Han, Feijiang. *PaperForge*. GitHub repository. <https://github.com/FeijiangHan/PaperForge>.
+
+```bibtex
+@misc{han_paperforge,
+  author       = {Feijiang Han},
+  title        = {PaperForge},
+  howpublished = {GitHub repository},
+  url          = {https://github.com/FeijiangHan/PaperForge}
+}
+```

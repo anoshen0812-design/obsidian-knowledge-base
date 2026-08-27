@@ -128,6 +128,34 @@ def load_config() -> Dict[str, Any]:
     return config
 
 
+def required_paper_skills(config: Dict[str, Any]) -> List[str]:
+    values = config.get("paper_reading_skills", ["paper-reading-zh", "paperforge-vault-note"])
+    if not isinstance(values, list):
+        raise RuntimeError("paper_reading_skills must be a JSON array")
+    if not values:
+        raise RuntimeError("paper_reading_skills cannot be empty")
+    skills: List[str] = []
+    for value in values:
+        name = str(value).strip()
+        if not re.fullmatch(r"[a-z0-9-]+", name):
+            raise RuntimeError(f"Invalid paper-reading skill name: {name!r}")
+        skills.append(name)
+    return skills
+
+
+def ensure_paper_skills(config: Dict[str, Any]) -> List[str]:
+    skills = required_paper_skills(config)
+    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    missing = [name for name in skills if not (codex_home / "skills" / name / "SKILL.md").is_file()]
+    if missing:
+        joined = ", ".join(missing)
+        raise RuntimeError(
+            f"Missing required paper-reading skills: {joined}. "
+            "Run scripts/install-paperforge-skills.py from the repository root."
+        )
+    return skills
+
+
 def queue_path(config: Dict[str, Any]) -> Path:
     return config["vault"] / "system" / "queue" / "pending.json"
 
@@ -411,6 +439,7 @@ def ingest_next(config: Dict[str, Any]) -> int:
         log(f"ingest start id={task['id']} kind={task['kind']}")
         try:
             if task["kind"] == "paper":
+                paper_skills = ensure_paper_skills(config)
                 generated_date = task.get("generated_date") or local_date()
                 task["generated_date"] = generated_date
                 task.update(paper_note_identity(task, generated_date))
@@ -418,10 +447,15 @@ def ingest_next(config: Dict[str, Any]) -> int:
                 extract_path = extract_pdf(config, task)
                 task["extract_path"] = str(extract_path.relative_to(config["vault"]))
             workflow = config["vault"] / "system" / "workflows" / "ingest.md"
+            skill_instruction = ""
+            if task["kind"] == "paper":
+                invocations = " and ".join(f"${name}" for name in paper_skills)
+                skill_instruction = f"\nUse {invocations} for the paper analysis and vault-note mapping."
             prompt = (
                 "执行知识库的单一来源摄取任务。严格读取并遵守 AGENTS.md 与 "
                 f"{workflow.relative_to(config['vault'])}。只处理下面 JSON 指定的一个任务；"
-                "不得处理队列中的其他项目，不得修改 sources/ 或 笔记/实验笔记/，也不得修改队列文件。\n\n"
+                "不得处理队列中的其他项目，不得修改 sources/ 或 笔记/实验笔记/，也不得修改队列文件。"
+                f"{skill_instruction}\n\n"
                 f"TASK_JSON:\n{json.dumps(task, ensure_ascii=False, indent=2)}"
             )
             result = codex_command(config, prompt, f"last-ingest-{safe_stem(task['id'])}")

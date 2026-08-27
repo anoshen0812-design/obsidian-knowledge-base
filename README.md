@@ -36,13 +36,20 @@ python3 system/knowledge/run_pipeline.py ingest-next
 - 所有论文声明应保留来源 PDF 页码链接；不确定页码时必须标记待核对。
 - `config.json`、`data.json`、队列状态、日志和生成内容已由 `.gitignore` 排除。
 
-## PaperForge 版本
+## PaperForge 论文阅读
 
-`paperforge` 分支在论文摄取阶段调用 PaperForge 阅读 skill，并继续遵守本知识库的来源链接、草稿审核和整合规则。上游 PaperForge 内容不打包在本仓库中；安装脚本会从上游仓库获取指定版本。
+论文摄取默认调用 PaperForge 阅读 skill，并继续遵守本知识库的来源链接、草稿审核和整合规则。首次处理论文前安装固定版本的阅读 skill：
+
+```bash
+python3 scripts/install-paperforge-skills.py
+```
+
+上游 PaperForge 内容不打包在本仓库中；安装脚本会从上游仓库获取并校验固定版本。
+PaperForge 由其上游作者维护：<https://github.com/FeijiangHan/PaperForge>。安装与使用上游文件时请遵守上游仓库的条款。
 
 ## 致谢与引用
 
-`paperforge` 分支的论文深度阅读流程基于 Feijiang Han 维护的 [PaperForge](https://github.com/FeijiangHan/PaperForge)。如果在研究或项目中使用该分支，请同时引用上游项目：
+本项目的论文深度阅读流程基于 Feijiang Han 维护的 [PaperForge](https://github.com/FeijiangHan/PaperForge)。如果在研究或项目中使用该流程，请同时引用上游项目：
 
 > Han, Feijiang. *PaperForge*. GitHub repository. <https://github.com/FeijiangHan/PaperForge>.
 

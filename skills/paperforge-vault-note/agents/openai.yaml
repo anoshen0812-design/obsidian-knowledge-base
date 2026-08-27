@@ -1,0 +1,4 @@
+interface:
+  display_name: "PaperForge Vault Note"
+  short_description: "Generate source-linked Obsidian paper notes"
+  default_prompt: "Use $paperforge-vault-note to create a source-linked paper draft from this PDF."

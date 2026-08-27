@@ -54,24 +54,32 @@ the visible alias in `wiki/index.md`. The deterministic runner has already set
 Keep the original bibliographic title in the `title` property. Experiment tasks keep
 their existing title convention.
 
-The body must contain:
+For paper tasks, apply the installed PaperForge reading protocol and use these headings in order:
 
-1. `# YYYY-MM-DD - First Author - Source title` for papers, or `# Title` for experiments
-2. `## 一句话结论`
-3. `## 研究问题` or `## 实验目的`
-4. `## 核心贡献` or `## 关键观察`
-5. `## 材料与方法`
-6. `## 关键结果`
-7. `## 机制解释`
-8. `## 局限性与不确定性`
-9. `## 与现有知识的候选关联`
-10. `## 可验证的知识声明`
-11. `## 后续问题`
-12. `## 人工复核`
+1. `# YYYY-MM-DD - First Author - Source title`
+2. `## 1. 研究问题与重要性`
+3. `## 2. 前人工作与不足`
+4. `## 3. 重建作者的思考路径`
+5. `## 4. 核心 Intuition`
+6. `## 5. 具体方法与完整 Pipeline`
+7. `## 6. 核心数学推导`
+8. `## 7. 实验设计与结论`
+9. `## 8. Take-aways`
+10. `## 9. 最脆弱的假设`
+11. `## 10. 最小复现实验`
+12. `## 11. 最强反例设计`
+13. `## 12. Follow-up Research Idea`
+14. `## 与现有知识的候选关联`
+15. `## 可验证的知识声明`
+16. `## 人工复核`
+
+For experiment tasks, retain the compact structure: `# Title`, `## 一句话结论`, `## 实验目的`, `## 关键观察`, `## 材料与方法`, `## 关键结果`, `## 机制解释`, `## 局限性与不确定性`, `## 与现有知识的候选关联`, `## 可验证的知识声明`, `## 后续问题`, and `## 人工复核`.
 
 Every substantive paper claim must end with an Obsidian link to the PDF page, for example `[[sources/literature/pdf/example.pdf#page=6|PDF p.6]]`. If a page cannot be established, mark the claim `（页码待核对）` rather than guessing.
 
 Candidate associations may use unresolved links such as `[[介电弹性体]]`, but do not create their pages during ingest. Prefer 3–8 high-value associations over exhaustive tagging.
+
+In paper drafts, explicitly label content as an author claim, a conclusion from prior literature, an evidence-based inference, or uncertain speculation. PaperForge analysis does not relax the page-citation requirement or the review gate.
 
 Add or update one entry for the draft under `## 待审核草稿` in `wiki/index.md`. Do not duplicate an existing entry.
 

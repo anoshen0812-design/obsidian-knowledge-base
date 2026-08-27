@@ -2,8 +2,11 @@
   "codex_path": "/path/to/codex",
   "codex_timeout_seconds": 1200,
   "minimum_extracted_characters": 1200,
+  "paper_reading_skills": [
+    "paper-reading-zh",
+    "paperforge-vault-note"
+  ],
   "pdftotext_path": "/path/to/pdftotext",
   "proxy_url": "",
   "vault_path": "/path/to/your/obsidian-vault"
 }
-

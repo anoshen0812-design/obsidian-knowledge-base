@@ -27,4 +27,3 @@
 - Integration rules: `system/workflows/integrate.md`
 - Health-check rules: `system/workflows/lint.md`
 - Queue state is program-owned; do not edit `system/queue/pending.json` manually.
-

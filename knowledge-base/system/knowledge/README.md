@@ -16,3 +16,13 @@ Obsidian exposes equivalent commands. Automatic ingest processes one source at a
 
 Paper draft filenames, level-one headings, and index aliases follow
 `YYYY-MM-DD - 第一作者 - 文献标题`. The date is fixed when draft generation first starts.
+
+## PaperForge branch
+
+Install the pinned upstream PaperForge skill and the vault adapter before processing papers:
+
+```bash
+python3 scripts/install-paperforge-skills.py
+```
+
+The installer downloads `SKILL_CHN.md` from a pinned PaperForge commit, verifies its checksum, and installs it as the standard `paper-reading-zh/SKILL.md`. Upstream PaperForge content is not vendored in this repository.

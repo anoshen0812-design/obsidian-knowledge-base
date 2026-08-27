@@ -38,5 +38,11 @@ python3 system/knowledge/run_pipeline.py ingest-next
 
 ## PaperForge 版本
 
-`paperforge` 分支在论文摄取阶段调用 PaperForge 阅读 skill，并继续遵守本知识库的来源链接、草稿审核和整合规则。上游 PaperForge 内容不打包在本仓库中；安装脚本会从上游仓库获取指定版本。
+`paperforge` 分支在论文摄取阶段调用 PaperForge 阅读 skill，并继续遵守本知识库的来源链接、草稿审核和整合规则。上游 PaperForge 内容不打包在本仓库中；安装脚本会从上游仓库获取并校验固定版本。
 
+```bash
+git switch paperforge
+python3 scripts/install-paperforge-skills.py
+```
+
+PaperForge 由其上游作者维护：<https://github.com/FeijiangHan/PaperForge>。安装与使用上游文件时请遵守上游仓库的条款。

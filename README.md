@@ -40,3 +40,17 @@ python3 system/knowledge/run_pipeline.py ingest-next
 
 `paperforge` 分支在论文摄取阶段调用 PaperForge 阅读 skill，并继续遵守本知识库的来源链接、草稿审核和整合规则。上游 PaperForge 内容不打包在本仓库中；安装脚本会从上游仓库获取指定版本。
 
+## 致谢与引用
+
+`paperforge` 分支的论文深度阅读流程基于 Feijiang Han 维护的 [PaperForge](https://github.com/FeijiangHan/PaperForge)。如果在研究或项目中使用该分支，请同时引用上游项目：
+
+> Han, Feijiang. *PaperForge*. GitHub repository. <https://github.com/FeijiangHan/PaperForge>.
+
+```bibtex
+@misc{han_paperforge,
+  author       = {Feijiang Han},
+  title        = {PaperForge},
+  howpublished = {GitHub repository},
+  url          = {https://github.com/FeijiangHan/PaperForge}
+}
+```

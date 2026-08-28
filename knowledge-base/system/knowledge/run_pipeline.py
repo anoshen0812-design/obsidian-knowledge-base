@@ -187,7 +187,12 @@ def supersede_older(queue: Dict[str, Any], source_identity: str, current_id: str
             item["updated_at"] = now_iso()
 
 
-def paper_task(entry: Dict[str, Any], vault: Path) -> Optional[Dict[str, Any]]:
+def paper_task(
+    entry: Dict[str, Any],
+    vault: Path,
+    supporting_entry: Optional[Dict[str, Any]] = None,
+    supporting_manifest_rel: str = "sources/literature/manifests/supporting-information.json",
+) -> Optional[Dict[str, Any]]:
     source_rel = entry.get("destination", "")
     source = vault / source_rel
     if not source.is_file():
@@ -196,6 +201,12 @@ def paper_task(entry: Dict[str, Any], vault: Path) -> Optional[Dict[str, Any]]:
     attachment_key = entry.get("attachment_key", "")
     parent_key = entry.get("parent_key", "") or attachment_key
     source_identity = f"paper:{attachment_key}"
+    supporting_entry = supporting_entry or {}
+    supporting_files = [
+        str(item.get("destination", ""))
+        for item in supporting_entry.get("files", [])
+        if item.get("destination") and (vault / str(item["destination"])).is_file()
+    ]
     task = {
         "active_in_zotero": bool(entry.get("active", True)),
         "attempts": 0,
@@ -211,6 +222,9 @@ def paper_task(entry: Dict[str, Any], vault: Path) -> Optional[Dict[str, Any]]:
         "source_identity": source_identity,
         "source_path": source_rel,
         "status": "pending",
+        "supporting_information": supporting_files,
+        "supporting_information_manifest": supporting_manifest_rel,
+        "supporting_information_status": supporting_entry.get("status", "not_checked"),
         "title": entry.get("title", "Untitled"),
         "updated_at": now_iso(),
         "url": entry.get("url", ""),
@@ -251,9 +265,27 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
 
     manifest_path = vault / "sources" / "literature" / "manifests" / "zotero-doc.json"
     manifest = read_json(manifest_path, {"items": []})
+    supporting_manifest_rel = str(
+        config.get(
+            "supporting_information_manifest",
+            "sources/literature/manifests/supporting-information.json",
+        )
+    )
+    supporting_manifest_path = vault / supporting_manifest_rel
+    supporting_manifest = read_json(supporting_manifest_path, {"items": []})
+    supporting_by_parent = {
+        str(entry.get("parent_key", "")): entry
+        for entry in supporting_manifest.get("items", [])
+        if entry.get("parent_key") and entry.get("active", True)
+    }
     for entry in manifest.get("items", []):
         if entry.get("active", True) or include_inactive:
-            task = paper_task(entry, vault)
+            task = paper_task(
+                entry,
+                vault,
+                supporting_by_parent.get(str(entry.get("parent_key", ""))),
+                supporting_manifest_rel,
+            )
             if task:
                 candidates.append(task)
 
@@ -265,17 +297,32 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
             candidates.append(experiment_task(source, vault))
 
     added = 0
+    refreshed = 0
+    refresh_keys = (
+        "supporting_information",
+        "supporting_information_manifest",
+        "supporting_information_status",
+    )
     for candidate in candidates:
         if candidate["id"] in known:
+            existing = next(item for item in queue["items"] if item.get("id") == candidate["id"])
+            changed = False
+            for key in refresh_keys:
+                if key in candidate and existing.get(key) != candidate.get(key):
+                    existing[key] = candidate[key]
+                    changed = True
+            if changed:
+                existing["metadata_updated_at"] = now_iso()
+                refreshed += 1
             continue
         supersede_older(queue, candidate["source_identity"], candidate["id"])
         queue["items"].append(candidate)
         known.add(candidate["id"])
         added += 1
 
-    if added:
+    if added or refreshed:
         save_queue(config, queue)
-    log(f"scan complete candidates={len(candidates)} added={added}")
+    log(f"scan complete candidates={len(candidates)} added={added} refreshed={refreshed}")
     return added
 
 

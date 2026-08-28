@@ -116,7 +116,7 @@ module.exports = class ZoteroDocSyncPlugin extends Plugin {
   async runCycle(showNotice) {
     return this.withLock(showNotice, "同步和知识处理", async () => {
       try {
-        await this.execPython(this.syncScript, [], 90 * 1000);
+        await this.execPython(this.syncScript, [], 5 * 60 * 1000);
       } catch (error) {
         console.warn("[Knowledge Base] Zotero sync unavailable; continuing queued knowledge work", error);
       }

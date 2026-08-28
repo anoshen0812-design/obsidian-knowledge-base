@@ -15,6 +15,14 @@ The caller supplies exactly one `TASK_JSON`. Process only that source.
 
 For a paper task, read the task metadata and its `extract_path`. Page headings in the extract correspond to PDF pages. Inspect the original PDF only when extraction is ambiguous or figures/tables are essential.
 
+`supporting_information` is an optional list of cached SI PDFs. Do not open or extract these files by default. Use SI only when all of the following are true:
+
+1. a concrete method, value, table, figure, or derivation needed by the draft cannot be verified in the primary PDF;
+2. the primary paper explicitly points to supporting information for that evidence; and
+3. the relevant cached SI file can be identified without guessing.
+
+When those conditions are met, inspect only the relevant SI file and pages. SI is auxiliary evidence and must never be queued or summarized as a separate paper.
+
 For an experiment task, read the human-authored Markdown at `source_path`. Treat observations as observations, and keep interpretations separate.
 
 ## Produce a draft note
@@ -36,6 +44,9 @@ zotero_item: "parent key"
 zotero_attachment: "attachment key"
 source_pdf: "[[sources/literature/pdf/example.pdf]]"
 extract: "[[extracts/papers/key.md]]"
+supporting_information:
+  - "[[sources/literature/si/PARENT/example.pdf]]"
+supporting_information_used: []
 year: "2026"
 reviewed: false
 concepts: []
@@ -75,7 +86,7 @@ For paper tasks, apply the installed PaperForge reading protocol and use these h
 
 For experiment tasks, retain the compact structure: `# Title`, `## 一句话结论`, `## 实验目的`, `## 关键观察`, `## 材料与方法`, `## 关键结果`, `## 机制解释`, `## 局限性与不确定性`, `## 与现有知识的候选关联`, `## 可验证的知识声明`, `## 后续问题`, and `## 人工复核`.
 
-Every substantive paper claim must end with an Obsidian link to the PDF page, for example `[[sources/literature/pdf/example.pdf#page=6|PDF p.6]]`. If a page cannot be established, mark the claim `（页码待核对）` rather than guessing.
+Every substantive paper claim must end with an Obsidian link to the primary PDF page, for example `[[sources/literature/pdf/example.pdf#page=6|PDF p.6]]`. If SI was genuinely required, cite it separately as `[[sources/literature/si/PARENT/example.pdf#page=12|SI p.12]]` and list that path under `supporting_information_used`. If no SI was opened, keep `supporting_information_used: []`. If a page cannot be established, mark the claim `（页码待核对）` rather than guessing.
 
 Candidate associations may use unresolved links such as `[[介电弹性体]]`, but do not create their pages during ingest. Prefer 3–8 high-value associations over exhaustive tagging.
 

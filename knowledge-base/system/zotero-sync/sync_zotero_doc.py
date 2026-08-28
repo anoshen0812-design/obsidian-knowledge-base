@@ -18,6 +18,12 @@ from typing import Any, Dict, Iterable, List
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
+from supporting_information import (
+    is_auxiliary_pdf_attachment,
+    is_supplementary_pdf_attachment,
+    sync_supporting_information,
+)
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "config.json"
@@ -171,7 +177,11 @@ def markdown_escape(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ").strip()
 
 
-def build_index(entries: Iterable[Dict[str, Any]], synced_at: str) -> str:
+def build_index(
+    entries: Iterable[Dict[str, Any]],
+    synced_at: str,
+    supporting_by_parent: Dict[str, List[Dict[str, Any]]],
+) -> str:
     lines = [
         "# Zotero Doc 文献索引",
         "",
@@ -179,8 +189,8 @@ def build_index(entries: Iterable[Dict[str, Any]], synced_at: str) -> str:
         "",
         f"最后同步：`{synced_at}`",
         "",
-        "| 文献 | 年份 | 作者 | PDF | Zotero |",
-        "|---|---:|---|---|---|",
+        "| 文献 | 年份 | 作者 | PDF | SI | Zotero |",
+        "|---|---:|---|---|---|---|",
     ]
     for entry in sorted(entries, key=lambda item: (item.get("year", ""), item.get("title", "")), reverse=True):
         title = markdown_escape(entry.get("title", "Untitled"))
@@ -188,8 +198,15 @@ def build_index(entries: Iterable[Dict[str, Any]], synced_at: str) -> str:
         authors = markdown_escape("、".join(entry.get("creators", [])[:3]))
         relative_pdf = entry["destination"]
         pdf_link = f"[[{relative_pdf}|PDF]]"
+        supporting_files = supporting_by_parent.get(str(entry.get("parent_key", "")), [])
+        if supporting_files:
+            first_si = supporting_files[0]["destination"]
+            suffix = f" +{len(supporting_files) - 1}" if len(supporting_files) > 1 else ""
+            si_link = f"[[{first_si}|SI]]{suffix}"
+        else:
+            si_link = "—"
         zotero_link = f"[打开](zotero://select/library/items/{entry['parent_key']})"
-        lines.append(f"| {title} | {year} | {authors} | {pdf_link} | {zotero_link} |")
+        lines.append(f"| {title} | {year} | {authors} | {pdf_link} | {si_link} | {zotero_link} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -242,11 +259,17 @@ def sync(config_path: Path) -> int:
         for item in items
         if item.get("data", {}).get("itemType") != "attachment"
     }
-    attachments = [
+    all_pdf_attachments = [
         item
         for item in items
         if item.get("data", {}).get("itemType") == "attachment"
         and item.get("data", {}).get("contentType") == "application/pdf"
+    ]
+    supplementary_attachments = [
+        item for item in all_pdf_attachments if is_supplementary_pdf_attachment(item)
+    ]
+    attachments = [
+        item for item in all_pdf_attachments if not is_auxiliary_pdf_attachment(item)
     ]
 
     synced_at = now_iso()
@@ -340,23 +363,69 @@ def sync(config_path: Path) -> int:
         "schema_version": 1,
     }
 
-    bibliography = api_get(
-        api_base,
-        f"users/0/collections/{quote(collection_key)}/items?format=bibtex",
-        accept="application/x-bibtex",
+    supporting_manifest: Dict[str, Any] = {"items": []}
+    supporting_changed = False
+    supporting_stats = {"available": 0, "downloaded": 0, "failed": 0}
+    try:
+        supporting_manifest, supporting_changed, supporting_stats = sync_supporting_information(
+            config=config,
+            vault=vault,
+            literature_dir=literature_dir,
+            parents=parents,
+            main_parent_keys=(entry.get("parent_key", "") for entry in active_entries),
+            supplementary_attachments=supplementary_attachments,
+            source_path_resolver=lambda attachment_key: source_path_for_attachment(api_base, attachment_key),
+            logger=log,
+        )
+        changed = changed or supporting_changed
+    except Exception as error:
+        log(f"SI sync failed without blocking primary PDFs: {error}")
+
+    supporting_by_parent = {
+        str(entry.get("parent_key", "")): list(entry.get("files", []))
+        for entry in supporting_manifest.get("items", [])
+        if entry.get("active", True) and entry.get("files")
+    }
+    previous_primary_manifest = read_json(manifest_path, {})
+    index_synced_at = (
+        synced_at
+        if changed
+        else str(previous_primary_manifest.get("generated_at") or synced_at)
     )
-    if not bib_path.exists() or bib_path.read_bytes() != bibliography:
-        changed = True
+    index_content = build_index(active_entries, index_synced_at, supporting_by_parent).encode("utf-8")
+    if not index_path.exists() or index_path.read_bytes() != index_content:
+        if not changed:
+            changed = True
+            index_content = build_index(active_entries, synced_at, supporting_by_parent).encode("utf-8")
+
+    bibliography = None
+    try:
+        bibliography = api_get(
+            api_base,
+            f"users/0/collections/{quote(collection_key)}/items?format=bibtex",
+            accept="application/x-bibtex",
+        )
+        if not bib_path.exists() or bib_path.read_bytes() != bibliography:
+            changed = True
+    except Exception as error:
+        log(f"bibliography refresh deferred; preserving previous file: {error}")
+        if not bib_path.exists():
+            failed += 1
 
     if changed:
-        atomic_write_bytes(bib_path, bibliography)
-        atomic_write_bytes(index_path, build_index(active_entries, synced_at).encode("utf-8"))
+        if index_synced_at != synced_at:
+            index_content = build_index(active_entries, synced_at, supporting_by_parent).encode("utf-8")
+        if bibliography is not None:
+            atomic_write_bytes(bib_path, bibliography)
+        atomic_write_bytes(index_path, index_content)
         atomic_write_json(manifest_path, manifest)
         atomic_write_json(state_path, state)
     scan_knowledge_queue(vault)
     log(
-        f"complete collection={collection_name!r} PDFs={len(attachments)} "
-        f"copied={copied} unchanged={unchanged} failed={failed} wrote={str(changed).lower()}"
+        f"complete collection={collection_name!r} primary_PDFs={len(attachments)} "
+        f"copied={copied} unchanged={unchanged} failed={failed} "
+        f"SI_available={supporting_stats['available']} SI_downloaded={supporting_stats['downloaded']} "
+        f"SI_checks_with_errors={supporting_stats['failed']} wrote={str(changed).lower()}"
     )
     return 1 if failed else 0
 

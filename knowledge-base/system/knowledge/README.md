@@ -14,6 +14,11 @@ Common commands:
 
 Obsidian exposes equivalent commands. Automatic ingest processes one source at a time. Scanned PDFs with insufficient extractable text are marked `needs_ocr` rather than summarized unreliably.
 
+If Zotero sync has cached supporting-information PDFs, their paths and availability
+are attached to the paper task. They are not extracted by default. PaperForge opens SI
+only for a specific claim that the primary paper explicitly delegates to SI, and cites
+the exact SI page when used.
+
 Paper draft filenames, level-one headings, and index aliases follow
 `YYYY-MM-DD - 第一作者 - 文献标题`. The date is fixed when draft generation first starts.
 

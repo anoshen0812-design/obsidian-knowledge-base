@@ -3,5 +3,15 @@
   "collection_key": "",
   "collection_name": "Doc",
   "literature_dir": "sources/literature",
+  "supplementary_information": {
+    "directory": "sources/literature/si",
+    "enabled": true,
+    "manifest": "sources/literature/manifests/supporting-information.json",
+    "max_file_bytes": 104857600,
+    "proxy_url": "",
+    "refresh_days": 30,
+    "retry_days": 7,
+    "timeout_seconds": 30
+  },
   "vault_path": "/path/to/your/obsidian-vault"
 }

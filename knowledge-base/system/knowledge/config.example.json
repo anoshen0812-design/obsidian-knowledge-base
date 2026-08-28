@@ -8,5 +8,6 @@
   ],
   "pdftotext_path": "/path/to/pdftotext",
   "proxy_url": "",
+  "supporting_information_manifest": "sources/literature/manifests/supporting-information.json",
   "vault_path": "/path/to/your/obsidian-vault"
 }

@@ -8,6 +8,7 @@
 
 - `plugins/codex-note-chat/`：在当前笔记中打开可移动问答窗，按需加入来源 PDF、选中文本和出链笔记，并支持人工复核及写回对话。
 - `plugins/zotero-doc-sync/`：定期同步 Zotero collection，并驱动知识任务队列。
+- `knowledge-base/system/zotero-sync/`：自动发现、校验并缓存 PDF Supporting Information，供 PaperForge 按需核对。
 - `plugins/pdf-selection-translator/`：在 Obsidian PDF 阅读器中翻译选中文本；包含 TypeScript 源码和构建产物。
 - `knowledge-base/`：Zotero PDF 镜像、PDF 文本提取、草稿生成、人工审核、知识整合和健康检查脚本。
 

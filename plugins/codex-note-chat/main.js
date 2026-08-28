@@ -9,7 +9,7 @@ const {
 const { spawn } = require("child_process");
 const path = require("path");
 
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.3.0";
 const DEFAULT_CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex";
 const MAX_NOTE_CHARACTERS = 120000;
 const MAX_SELECTION_CHARACTERS = 16000;
@@ -17,6 +17,13 @@ const MAX_OUTLINK_NOTES = 12;
 const MAX_OUTLINK_CHARACTERS = 16000;
 const MAX_OUTLINK_TOTAL_CHARACTERS = 64000;
 const MAX_STORED_MESSAGES = 80;
+const PANEL_MARGIN = 12;
+const PANEL_MIN_WIDTH = 340;
+const PANEL_MIN_HEIGHT = 360;
+
+function clampNumber(value, minimum, maximum) {
+  return Math.min(Math.max(value, minimum), maximum);
+}
 
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -414,6 +421,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     this.saveTimer = null;
     this.selectionProbeTimer = null;
     this.dragState = null;
+    this.resizeState = null;
 
     const runtime = await this.loadRuntimeConfig();
     this.server = new CodexAppServer({
@@ -651,7 +659,19 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     composerActions.append(connectionStatus, buttonGroup);
     composer.append(inputLabel, composerActions);
 
-    panel.append(header, contextArea, reviewArea, messages, composer);
+    const resizeHandles = ["n", "ne", "e", "se", "s", "sw", "w", "nw"].map(
+      (direction) => {
+        const handle = createElement(
+          "div",
+          `codex-note-chat-resize-handle is-${direction}`
+        );
+        handle.dataset.direction = direction;
+        handle.setAttribute("aria-hidden", "true");
+        return handle;
+      }
+    );
+
+    panel.append(header, contextArea, reviewArea, messages, composer, ...resizeHandles);
     document.body.appendChild(panel);
     this.panel = panel;
     this.refs = {
@@ -685,12 +705,27 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     });
     this.registerDomEvent(header, "pointerdown", (event) => this.startDrag(event));
     this.registerDomEvent(header, "keydown", (event) => this.movePanelWithKeyboard(event));
-    this.registerDomEvent(document, "pointermove", (event) => this.continueDrag(event));
-    this.registerDomEvent(document, "pointerup", () => this.stopDrag());
+    for (const handle of resizeHandles) {
+      this.registerDomEvent(handle, "pointerdown", (event) => this.startResize(event));
+    }
+    this.registerDomEvent(document, "pointermove", (event) => {
+      this.continueDrag(event);
+      this.continueResize(event);
+    });
+    this.registerDomEvent(document, "pointerup", (event) => {
+      this.stopDrag(event);
+      this.stopResize(event);
+    });
+    this.registerDomEvent(document, "pointercancel", (event) => {
+      this.stopDrag(event);
+      this.stopResize(event);
+    });
 
     if (typeof ResizeObserver !== "undefined") {
       const resizeObserver = new ResizeObserver(() => {
-        if (this.panelVisible && !this.dragState) this.captureWindowState();
+        if (this.panelVisible && !this.dragState && !this.resizeState) {
+          this.captureWindowState();
+        }
       });
       resizeObserver.observe(panel);
       this.register(() => resizeObserver.disconnect());
@@ -719,14 +754,23 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
 
   applyWindowState() {
     const saved = this.state.window || {};
-    const width = Math.min(saved.width || 440, window.innerWidth - 32);
-    const height = Math.min(saved.height || 620, window.innerHeight - 48);
+    const limits = this.getPanelLimits();
+    const width = clampNumber(
+      Number.isFinite(saved.width) ? saved.width : 440,
+      limits.minWidth,
+      limits.maxWidth
+    );
+    const height = clampNumber(
+      Number.isFinite(saved.height) ? saved.height : 620,
+      limits.minHeight,
+      limits.maxHeight
+    );
     const left = Number.isFinite(saved.left)
       ? saved.left
-      : Math.max(16, window.innerWidth - width - 24);
+      : Math.max(PANEL_MARGIN, window.innerWidth - width - 24);
     const top = Number.isFinite(saved.top) ? saved.top : 84;
-    this.panel.style.width = `${Math.max(340, width)}px`;
-    this.panel.style.height = `${Math.max(420, height)}px`;
+    this.panel.style.width = `${width}px`;
+    this.panel.style.height = `${height}px`;
     this.panel.style.left = `${left}px`;
     this.panel.style.top = `${top}px`;
     this.panel.style.right = "auto";
@@ -747,17 +791,38 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
   constrainPanelToViewport() {
     if (!this.panel || !this.panelVisible) return;
     const rect = this.panel.getBoundingClientRect();
-    const margin = 12;
-    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
-    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
-    const left = Math.min(Math.max(rect.left, margin), maxLeft);
-    const top = Math.min(Math.max(rect.top, margin), maxTop);
+    const limits = this.getPanelLimits();
+    const width = clampNumber(rect.width, limits.minWidth, limits.maxWidth);
+    const height = clampNumber(rect.height, limits.minHeight, limits.maxHeight);
+    const maxLeft = Math.max(PANEL_MARGIN, window.innerWidth - width - PANEL_MARGIN);
+    const maxTop = Math.max(PANEL_MARGIN, window.innerHeight - height - PANEL_MARGIN);
+    const left = clampNumber(rect.left, PANEL_MARGIN, maxLeft);
+    const top = clampNumber(rect.top, PANEL_MARGIN, maxTop);
+    this.panel.style.width = `${width}px`;
+    this.panel.style.height = `${height}px`;
     this.panel.style.left = `${left}px`;
     this.panel.style.top = `${top}px`;
   }
 
+  getPanelLimits() {
+    const maxWidth = Math.max(0, window.innerWidth - PANEL_MARGIN * 2);
+    const maxHeight = Math.max(0, window.innerHeight - PANEL_MARGIN * 2);
+    return {
+      minWidth: Math.min(PANEL_MIN_WIDTH, maxWidth),
+      minHeight: Math.min(PANEL_MIN_HEIGHT, maxHeight),
+      maxWidth,
+      maxHeight,
+    };
+  }
+
   startDrag(event) {
-    if (event.button !== 0 || event.target.closest("button, input, textarea")) return;
+    if (
+      this.resizeState ||
+      event.button !== 0 ||
+      event.target.closest("button, input, textarea")
+    ) {
+      return;
+    }
     const rect = this.panel.getBoundingClientRect();
     this.dragState = {
       pointerId: event.pointerId,
@@ -779,10 +844,98 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     this.constrainPanelToViewport();
   }
 
-  stopDrag() {
-    if (!this.dragState) return;
+  stopDrag(event) {
+    if (
+      !this.dragState ||
+      (event && event.pointerId !== this.dragState.pointerId)
+    ) {
+      return;
+    }
     this.dragState = null;
     this.panel.removeClass("is-dragging");
+    this.captureWindowState();
+    this.scheduleSave();
+  }
+
+  startResize(event) {
+    if (this.dragState || event.button !== 0) return;
+    const direction = event.currentTarget.dataset.direction;
+    if (!direction) return;
+    const rect = this.panel.getBoundingClientRect();
+    this.resizeState = {
+      pointerId: event.pointerId,
+      direction,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+    };
+    this.panel.addClass("is-resizing");
+    if (typeof event.currentTarget.setPointerCapture === "function") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  continueResize(event) {
+    if (!this.resizeState || event.pointerId !== this.resizeState.pointerId) return;
+    const state = this.resizeState;
+    const limits = this.getPanelLimits();
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    let left = state.left;
+    let top = state.top;
+    let right = state.right;
+    let bottom = state.bottom;
+
+    if (state.direction.includes("w")) {
+      left = clampNumber(
+        state.left + deltaX,
+        PANEL_MARGIN,
+        state.right - limits.minWidth
+      );
+    }
+    if (state.direction.includes("e")) {
+      right = clampNumber(
+        state.right + deltaX,
+        state.left + limits.minWidth,
+        window.innerWidth - PANEL_MARGIN
+      );
+    }
+    if (state.direction.includes("n")) {
+      top = clampNumber(
+        state.top + deltaY,
+        PANEL_MARGIN,
+        state.bottom - limits.minHeight
+      );
+    }
+    if (state.direction.includes("s")) {
+      bottom = clampNumber(
+        state.bottom + deltaY,
+        state.top + limits.minHeight,
+        window.innerHeight - PANEL_MARGIN
+      );
+    }
+
+    this.panel.style.left = `${left}px`;
+    this.panel.style.top = `${top}px`;
+    this.panel.style.width = `${right - left}px`;
+    this.panel.style.height = `${bottom - top}px`;
+    event.preventDefault();
+  }
+
+  stopResize(event) {
+    if (
+      !this.resizeState ||
+      (event && event.pointerId !== this.resizeState.pointerId)
+    ) {
+      return;
+    }
+    this.resizeState = null;
+    this.panel.removeClass("is-resizing");
     this.captureWindowState();
     this.scheduleSave();
   }

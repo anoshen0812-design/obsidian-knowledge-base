@@ -167,10 +167,12 @@
 .codex-note-chat-composer-actions,
 .codex-note-chat-context-top,
 .codex-note-chat-context-actions,
+.codex-note-chat-context-heading,
 .codex-note-chat-context-options,
 .codex-note-chat-context-chips,
 .codex-note-chat-review,
-.codex-note-chat-review-actions {
+.codex-note-chat-review-actions,
+.codex-note-chat-composer-top {
   display: flex;
   align-items: center;
 }
@@ -206,6 +208,17 @@
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.codex-note-chat-context.is-collapsed {
+  padding-bottom: 7px;
+}
+
+.codex-note-chat-context.is-collapsed .codex-note-chat-context-action,
+.codex-note-chat-context.is-collapsed
+  .codex-note-chat-context-actions
+  > .codex-note-chat-icon-button:not(.codex-note-chat-context-toggle) {
+  display: none;
+}
+
 .codex-note-chat-context-top {
   justify-content: space-between;
   min-height: 32px;
@@ -218,10 +231,29 @@
   letter-spacing: 0.02em;
 }
 
+.codex-note-chat-context-heading {
+  min-width: 0;
+  gap: 6px;
+}
+
+.codex-note-chat-context-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .codex-note-chat-context-top .codex-note-chat-icon-button {
   width: 32px;
   min-width: 32px;
   height: 32px;
+}
+
+.codex-note-chat-context-toggle svg {
+  transition: transform 180ms ease-out;
 }
 
 .codex-note-chat-context-action {
@@ -449,7 +481,6 @@
   white-space: normal;
 }
 
-.codex-note-chat-message.is-user .codex-note-chat-message-content,
 .codex-note-chat-message.is-error .codex-note-chat-message-content,
 .codex-note-chat-message.is-streaming .codex-note-chat-message-content {
   white-space: pre-wrap;
@@ -480,12 +511,16 @@
   animation: codex-note-chat-caret 900ms steps(1) infinite;
 }
 
-.codex-note-chat-message-content > :first-child {
+.codex-note-chat-markdown > :first-child {
   margin-top: 0;
 }
 
-.codex-note-chat-message-content > :last-child {
+.codex-note-chat-markdown > :last-child {
   margin-bottom: 0;
+}
+
+.codex-note-chat-markdown {
+  min-width: 0;
 }
 
 .codex-note-chat-message-content pre {
@@ -558,10 +593,47 @@
 
 .codex-note-chat-message-content .math,
 .codex-note-chat-message-content .math-block,
-.codex-note-chat-message-content .katex-display {
+.codex-note-chat-message-content .katex-display,
+.codex-note-chat-message-content .mathjax-block,
+.codex-note-chat-message-content mjx-container[display="true"] {
+  display: block;
   max-width: 100%;
+  margin: 0.65em 0;
+  padding: 2px 0;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+.codex-note-chat-message-content mjx-container {
+  color: inherit;
+}
+
+.codex-note-chat-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.codex-note-chat-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px;
+  color: inherit;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 999px;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+}
+
+.codex-note-chat-message-attachment-icon,
+.codex-note-chat-message-attachment-icon svg {
+  width: 13px;
+  min-width: 13px;
+  height: 13px;
 }
 
 .codex-note-chat-message-content a {
@@ -577,10 +649,51 @@
 }
 
 .codex-note-chat-input-label {
-  display: block;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   font-weight: 600;
+}
+
+.codex-note-chat-composer-top {
+  justify-content: space-between;
+  gap: var(--cnc-gap-2);
+}
+
+.codex-note-chat-attachment-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.codex-note-chat-attachment-button:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+}
+
+.codex-note-chat-attachment-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.44;
+}
+
+.codex-note-chat-attachment-icon,
+.codex-note-chat-attachment-icon svg {
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+}
+
+.codex-note-chat-file-input {
+  display: none;
 }
 
 .codex-note-chat-input {
@@ -598,6 +711,65 @@
   font-family: var(--font-interface);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.codex-note-chat-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.codex-note-chat-attachments[hidden] {
+  display: none;
+}
+
+.codex-note-chat-attachment {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 5px 4px 8px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+}
+
+.codex-note-chat-attachment-type,
+.codex-note-chat-attachment-type svg {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  color: var(--interactive-accent);
+}
+
+.codex-note-chat-attachment-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.codex-note-chat-attachment-name {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-note-chat-attachment-meta {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.codex-note-chat-attachment-remove {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
 }
 
 .codex-note-chat-input:hover {
@@ -701,6 +873,10 @@
   .codex-note-chat-composer-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .codex-note-chat-attachment-button-text {
+    display: none;
   }
 
   .codex-note-chat-button-group {

@@ -9,7 +9,7 @@ const {
 const { spawn } = require("child_process");
 const path = require("path");
 
-const PLUGIN_VERSION = "0.3.0";
+const PLUGIN_VERSION = "0.3.1";
 const DEFAULT_CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex";
 const MAX_NOTE_CHARACTERS = 120000;
 const MAX_SELECTION_CHARACTERS = 16000;
@@ -30,6 +30,26 @@ function createElement(tag, className, text) {
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+function readDomSelectionWithin(container, selection) {
+  if (
+    !container ||
+    !selection ||
+    selection.rangeCount === 0 ||
+    selection.isCollapsed ||
+    !selection.anchorNode ||
+    !selection.focusNode
+  ) {
+    return "";
+  }
+  if (
+    !container.contains(selection.anchorNode) ||
+    !container.contains(selection.focusNode)
+  ) {
+    return "";
+  }
+  return selection.toString().trim();
 }
 
 function truncateText(text, maximum, label) {
@@ -960,9 +980,24 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
 
   readCurrentSelection() {
     try {
-      return this.boundView && this.boundView.editor
-        ? this.boundView.editor.getSelection().trim()
-        : "";
+      if (!this.boundView) return "";
+      const container = this.boundView.contentEl || this.boundView.containerEl;
+      const selectionWindow =
+        (container && container.ownerDocument && container.ownerDocument.defaultView) ||
+        window;
+      const domSelection = () =>
+        readDomSelectionWithin(container, selectionWindow.getSelection());
+      if (
+        typeof this.boundView.getMode === "function" &&
+        this.boundView.getMode() === "preview"
+      ) {
+        return domSelection();
+      }
+      if (this.boundView.editor) {
+        const editorSelection = this.boundView.editor.getSelection().trim();
+        if (editorSelection) return editorSelection;
+      }
+      return domSelection();
     } catch (_) {
       return "";
     }

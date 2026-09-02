@@ -752,6 +752,11 @@ def pdf_extractor_signature(config: Dict[str, Any]) -> str:
         backend = str(config.get("mineru_backend", "pipeline")).strip()
         method = str(config.get("mineru_method", "auto")).strip()
         return f"mineru:{backend}:{method}:v1"
+    # OPTIONAL FEATURE START: MinerU cloud API backend. The token is supplied
+    # at runtime through MINERU_API_TOKEN, never stored in config.json.
+    if extractor in {"mineru-cloud", "mineru-api"}:
+        return f"mineru-cloud:{os.environ.get('MINERU_MODEL', 'vlm')}:v1"
+    # OPTIONAL FEATURE END: MinerU cloud API backend.
     if extractor == "pdftotext":
         return "pdftotext:layout:v1"
     raise RuntimeError(f"Unsupported pdf_extractor: {extractor!r}")
@@ -1013,6 +1018,48 @@ def extract_pdf_with_mineru(config: Dict[str, Any], task: Dict[str, Any]) -> str
     return markdown
 
 
+# OPTIONAL FEATURE START: MinerU cloud API backend.
+def extract_pdf_with_mineru_cloud(config: Dict[str, Any], task: Dict[str, Any]) -> str:
+    """Parse through MinerU's cloud API and reuse the normal page/image contract."""
+
+    if not os.environ.get("MINERU_API_TOKEN", "").strip():
+        raise RuntimeError("MinerU cloud API key is not configured")
+    from mineru_api import parse_pdf
+
+    source = config["vault"] / task["source_path"]
+    key = safe_stem(str(task.get("attachment_key") or source.stem), max_bytes=80)
+    cache_rel = Path(str(config.get("mineru_cloud_cache_dir", "system/mineru-cache")))
+    cache_dir = config["vault"] / cache_rel / key / task["sha256"][:12]
+    parse_pdf(
+        source,
+        cache_dir,
+        model=os.environ.get("MINERU_MODEL", "vlm"),
+        language=str(config.get("mineru_language", "")),
+        rich_content=os.environ.get("MINERU_RICH_CONTENT", "true").lower() != "false",
+    )
+    content_list_path = mineru_output_file(cache_dir, source, "_content_list.json")
+    content_list = read_json(content_list_path, None)
+    if not isinstance(content_list, list):
+        raise RuntimeError("MinerU cloud content list is not a JSON array")
+    pages: Dict[int, List[str]] = {}
+    for item in content_list:
+        if not isinstance(item, dict):
+            continue
+        try:
+            page_number = int(item.get("page_idx")) + 1
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("MinerU cloud item is missing page_idx") from error
+        rendered = render_mineru_item(config, task, content_list_path.parent, item).strip()
+        if rendered:
+            pages.setdefault(page_number, []).append(rendered)
+    page_documents = [(number, "\n\n".join(parts)) for number, parts in sorted(pages.items())]
+    visible_chars = len(re.sub(r"\s+", "", "\n".join(text for _, text in page_documents)))
+    if visible_chars < int(config.get("minimum_extracted_characters", 1200)):
+        raise ValueError(f"needs_ocr: MinerU cloud extracted only {visible_chars} non-whitespace characters")
+    return extracted_document(task, page_documents, "mineru-cloud", pdf_extractor_signature(config))
+# OPTIONAL FEATURE END: MinerU cloud API backend.
+
+
 def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
     vault = config["vault"]
     destination = vault / task["extract_path"]
@@ -1036,6 +1083,14 @@ def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
                 markdown = extract_pdf_with_pdftotext(config, task)
             except ValueError as fallback_error:
                 raise ValueError(f"needs_ocr: MinerU failed ({mineru_error}); {fallback_error}") from fallback_error
+    elif extractor in {"mineru-cloud", "mineru-api"}:
+        try:
+            markdown = extract_pdf_with_mineru_cloud(config, task)
+        except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as mineru_error:
+            if not config.get("mineru_fallback_to_pdftotext", True):
+                raise
+            log(f"MinerU cloud extraction failed; falling back to pdftotext: {mineru_error}")
+            markdown = extract_pdf_with_pdftotext(config, task)
     else:
         markdown = extract_pdf_with_pdftotext(config, task)
     atomic_write_text(destination, markdown)

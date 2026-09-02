@@ -3,6 +3,7 @@
   "codex_timeout_seconds": 1800,
   "forge_python_path": "/path/to/python-3.10-or-newer",
   "minimum_extracted_characters": 1200,
+  "mineru_cloud_cache_dir": "system/mineru-cache",
   "mineru_backend": "pipeline",
   "mineru_fallback_to_pdftotext": true,
   "mineru_formula": true,

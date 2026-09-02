@@ -61,6 +61,28 @@ Markdown，供 Forge Paper Note 保留可核查的 PDF 页码引用；MinerU 的
 自动回退到 `pdftotext -layout`。只有两种方式都无法取得足够文本时，任务才会
 进入 `needs_ocr`。
 
+### 可选增强与本次贡献对比
+
+本仓库的基础版本以**本地 MinerU CLI**为主解析器；本次贡献保留该默认行为，额外加入了可选的 **MinerU Cloud API** 后端、侧栏工作流快捷按钮、可保存/显示的云端 API 密钥设置，以及增强的 Codex 笔记复核与来源回填交互。它们均不包含任何个人 Vault、文献、密钥、文件路径或运行记录。
+
+| 能力 | 基础版本 | 本次贡献 | 是否默认启用 |
+| --- | --- | --- | --- |
+| 本地 MinerU CLI | 支持 | 保留不变 | 是，`pdf_extractor: "mineru"` |
+| MinerU Cloud API | 不支持 | 新增，可在 Obsidian 设置中保存密钥 | 否，设为 `mineru-cloud` 后启用 |
+| 论文重生成、图片收拢、侧栏快捷键 | 命令面板为主 | 增加可选侧栏入口与更严格的当前笔记校验 | 是，可删除 |
+| Codex 问答的模型/推理选择、来源回填与复核应用 | 基础问答/复核 | 增强为可选交互模块 | 是，可删除 |
+
+每个新增功能都用 `OPTIONAL FEATURE START/END` 注释标出，并在
+[可选功能清单](docs/OPTIONAL_FEATURES.md) 中列出可整体删除的文件或代码区域。删除某项后即可回到相应的基础工作流；不要删除基础的本地 MinerU、队列和审核流程。
+
+#### 启用 MinerU Cloud API
+
+1. 在 Obsidian 设置中打开 **Zotero Doc Sync → MinerU PDF 解析**，保存 API Key 并选择模型。
+2. 在 `system/knowledge/config.json` 中设置 `"pdf_extractor": "mineru-cloud"`。
+3. 保留 `mineru_fallback_to_pdftotext: true`，以便云端服务不可用时安全回退。
+
+密钥只存于当前 Vault 的插件数据，并通过运行时环境变量传递；不得提交 `data.json` 或 `config.json`。
+
 ## Forge Paper Note 论文阅读
 
 论文摄取只调用设备本地的 `forge-paper-note` skill，并继续遵守本知识库的来源链接、草稿审核、图片隔离和整合规则。首次处理论文前验证 skill：

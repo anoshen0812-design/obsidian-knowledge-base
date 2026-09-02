@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -126,6 +128,37 @@ class PipelinePdfExtractionTest(unittest.TestCase):
             with mock.patch.object(PIPELINE.subprocess, "run", return_value=failure):
                 with self.assertRaisesRegex(RuntimeError, "model unavailable"):
                     PIPELINE.extract_pdf(config, task)
+
+    def test_optional_mineru_cloud_reuses_page_and_asset_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config, task = self.make_fixture(directory)
+            config["pdf_extractor"] = "mineru-cloud"
+
+            def fake_parse_pdf(source, output_dir, **kwargs):
+                image = output_dir / "images" / "cloud.jpg"
+                image.parent.mkdir(parents=True)
+                image.write_bytes(b"cloud-image")
+                (output_dir / "cloud_content_list.json").write_text(
+                    json.dumps([
+                        {"type": "text", "text": "Cloud evidence.", "page_idx": 0},
+                        {"type": "image", "image_caption": ["Figure C"], "img_path": "images/cloud.jpg", "page_idx": 0},
+                    ]),
+                    encoding="utf-8",
+                )
+                return output_dir / "full.md"
+
+            with mock.patch.dict(sys.modules, {"mineru_api": types.SimpleNamespace(parse_pdf=fake_parse_pdf)}):
+                with mock.patch.dict("os.environ", {"MINERU_API_TOKEN": "test", "MINERU_MODEL": "vlm"}, clear=False):
+                    destination = PIPELINE.extract_pdf(config, task)
+
+            markdown = destination.read_text(encoding="utf-8")
+            self.assertIn("extractor: mineru-cloud", markdown)
+            self.assertIn("extractor_signature: mineru-cloud:vlm:v1", markdown)
+            self.assertIn("## Page 1", markdown)
+            self.assertIn("Cloud evidence.", markdown)
+            self.assertIn("Figure C", markdown)
+            asset = config["vault"] / "extracts/papers/assets/ABC123" / ("a" * 12) / "cloud.jpg"
+            self.assertTrue(asset.is_file())
 
     def test_rejects_asset_path_outside_mineru_output(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -17,8 +17,20 @@
 1. 将需要的插件目录复制到 `<vault>/.obsidian/plugins/`，并在 Obsidian 中启用。
 2. 将 `knowledge-base/` 内的内容复制到 vault 根目录。
 3. 分别复制两个 `config.example.json` 为 `config.json`，填写本机路径和 Zotero collection 名称。
-4. 确保 Zotero 已开启本地 API，并安装 `pdftotext` 与 Codex CLI。
+4. 确保 Zotero 已开启本地 API，并安装 MinerU、`pdftotext` 与 Codex CLI。MinerU 是主解析器，`pdftotext` 是自动回退。
 5. 在 vault 中创建 `sources/literature/`、`笔记/实验笔记/`、`extracts/papers/` 和 `wiki/` 所需目录。
+
+推荐使用独立 Python 3.12 环境安装 MinerU，避免影响系统 Python：
+
+```bash
+brew install uv
+uv venv --python 3.12 /path/to/mineru-environment
+uv pip install --python /path/to/mineru-environment/bin/python -U "mineru[all]"
+/path/to/mineru-environment/bin/mineru --version
+```
+
+首次实际解析会下载模型，请预留足够磁盘空间。把独立环境里的 `mineru`
+绝对路径填入 `system/knowledge/config.json` 的 `mineru_path`。
 
 手动验证：
 
@@ -37,6 +49,15 @@ python3 system/knowledge/run_pipeline.py ingest-next
 - 所有论文声明应保留来源 PDF 页码链接；不确定页码时必须标记待核对。
 - 论文属性自动获取并保留影响因子、统计年份、官方来源和核验时间；缺失时写 `null`，不以其他引用指标替代。
 - `config.json`、`data.json`、队列状态、日志和生成内容已由 `.gitignore` 排除。
+
+## PDF 解析
+
+论文默认由 MinerU 解析双栏版面、公式、表格、图像和扫描页。流水线读取
+MinerU 的 `content_list.json`，使用 `page_idx` 重新生成带 `## Page N` 的
+Markdown，供 PaperForge 保留可核查的 PDF 页码引用；提取的图像保存在
+`extracts/papers/assets/`。如果 MinerU 缺失、超时、失败或输出不足，流水线会
+自动回退到 `pdftotext -layout`。只有两种方式都无法取得足够文本时，任务才会
+进入 `needs_ocr`。
 
 ## PaperForge 论文阅读
 

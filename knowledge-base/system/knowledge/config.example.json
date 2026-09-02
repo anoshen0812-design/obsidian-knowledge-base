@@ -2,11 +2,23 @@
   "codex_path": "/path/to/codex",
   "codex_timeout_seconds": 1200,
   "minimum_extracted_characters": 1200,
+  "mineru_backend": "pipeline",
+  "mineru_fallback_to_pdftotext": true,
+  "mineru_formula": true,
+  "mineru_language": "",
+  "mineru_method": "auto",
+  "mineru_model_cache": "/path/to/mineru-model-cache",
+  "mineru_model_source": "modelscope",
+  "mineru_path": "/path/to/mineru-environment/bin/mineru",
+  "mineru_table": true,
+  "mineru_timeout_seconds": 1800,
   "paper_reading_skills": [
     "paper-reading-zh",
     "paperforge-vault-note"
   ],
+  "pdf_extractor": "mineru",
   "pdftotext_path": "/path/to/pdftotext",
+  "pdftotext_timeout_seconds": 180,
   "proxy_url": "",
   "supporting_information_manifest": "sources/literature/manifests/supporting-information.json",
   "vault_path": "/path/to/your/obsidian-vault"

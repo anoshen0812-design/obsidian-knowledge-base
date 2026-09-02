@@ -448,14 +448,59 @@ def pipeline_lock(config: Dict[str, Any]):
         lock_path.unlink(missing_ok=True)
 
 
-def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
-    vault = config["vault"]
-    source = vault / task["source_path"]
-    destination = vault / task["extract_path"]
-    marker = f"source_sha256: {task['sha256']}"
-    if destination.exists() and marker in destination.read_text(encoding="utf-8", errors="ignore")[:1000]:
-        return destination
+def configured_environment(config: Dict[str, Any]) -> Dict[str, str]:
+    environment = os.environ.copy()
+    proxy_url = str(config.get("proxy_url", "")).strip()
+    if proxy_url:
+        for key in ("all_proxy", "http_proxy", "https_proxy", "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"):
+            environment[key] = proxy_url
+        environment.setdefault("no_proxy", "localhost,127.0.0.1")
+        environment.setdefault("NO_PROXY", "localhost,127.0.0.1")
+    return environment
 
+
+def pdf_extractor_signature(config: Dict[str, Any]) -> str:
+    extractor = str(config.get("pdf_extractor", "pdftotext")).strip().casefold()
+    if extractor == "mineru":
+        backend = str(config.get("mineru_backend", "pipeline")).strip()
+        method = str(config.get("mineru_method", "auto")).strip()
+        return f"mineru:{backend}:{method}:v1"
+    if extractor == "pdftotext":
+        return "pdftotext:layout:v1"
+    raise RuntimeError(f"Unsupported pdf_extractor: {extractor!r}")
+
+
+def extracted_document(
+    task: Dict[str, Any],
+    pages: Iterable[tuple],
+    extractor: str,
+    extractor_signature: str,
+) -> str:
+    lines = [
+        "---",
+        "type: extracted-paper",
+        f"source_pdf: \"[[{task['source_path']}]]\"",
+        f"source_sha256: {task['sha256']}",
+        f"attachment_key: {task.get('attachment_key', '')}",
+        f"extractor: {extractor}",
+        f"extractor_signature: {extractor_signature}",
+        f"generated_at: {now_iso()}",
+        "---",
+        "",
+        f"# {task.get('title', 'Untitled')} — 提取文本",
+        "",
+        "> 此文件由程序从 PDF 提取，可随时重新生成。页码标题用于知识声明溯源。",
+        "",
+    ]
+    for page_number, page in pages:
+        page = str(page).strip()
+        if page:
+            lines.extend([f"## Page {page_number}", "", page, ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def extract_pdf_with_pdftotext(config: Dict[str, Any], task: Dict[str, Any]) -> str:
+    source = config["vault"] / task["source_path"]
     fd, temp_name = tempfile.mkstemp(prefix="knowledge-extract-", suffix=".txt")
     os.close(fd)
     try:
@@ -463,7 +508,7 @@ def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
             [config["pdftotext_path"], "-layout", "-enc", "UTF-8", str(source), temp_name],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=int(config.get("pdftotext_timeout_seconds", 180)),
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "pdftotext failed")
@@ -473,29 +518,240 @@ def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
 
     visible_chars = len(re.sub(r"\s+", "", raw))
     if visible_chars < int(config.get("minimum_extracted_characters", 1200)):
-        raise ValueError(f"needs_ocr: extracted only {visible_chars} non-whitespace characters")
+        raise ValueError(f"needs_ocr: pdftotext extracted only {visible_chars} non-whitespace characters")
+    pages = ((page_number, page) for page_number, page in enumerate(raw.split("\f"), start=1))
+    return extracted_document(task, pages, "pdftotext", "pdftotext:layout:v1")
 
-    pages = raw.split("\f")
-    lines = [
-        "---",
-        "type: extracted-paper",
-        f"source_pdf: \"[[{task['source_path']}]]\"",
-        f"source_sha256: {task['sha256']}",
-        f"attachment_key: {task.get('attachment_key', '')}",
-        f"generated_at: {now_iso()}",
-        "---",
-        "",
-        f"# {task.get('title', 'Untitled')} — 提取文本",
-        "",
-        "> 此文件由程序从 PDF 提取，可随时重新生成。页码标题用于知识声明溯源。",
-        "",
+
+def mineru_output_file(output_root: Path, source: Path, suffix: str) -> Path:
+    preferred_name = f"{source.stem}{suffix}"
+    preferred = sorted(output_root.rglob(preferred_name))
+    if len(preferred) == 1:
+        return preferred[0]
+    candidates = sorted(output_root.rglob(f"*{suffix}"))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise RuntimeError(f"MinerU did not produce {suffix}")
+    raise RuntimeError(f"MinerU produced ambiguous {suffix} files")
+
+
+def safe_mineru_asset(
+    config: Dict[str, Any],
+    task: Dict[str, Any],
+    parse_dir: Path,
+    raw_asset_path: Any,
+) -> str:
+    raw_value = str(raw_asset_path or "").strip()
+    if not raw_value:
+        return ""
+    source_asset = (parse_dir / raw_value).resolve()
+    parse_root = parse_dir.resolve()
+    try:
+        source_asset.relative_to(parse_root)
+    except ValueError as error:
+        raise RuntimeError(f"MinerU asset escaped its output directory: {raw_value}") from error
+    if not source_asset.is_file():
+        return ""
+
+    attachment_key = safe_stem(str(task.get("attachment_key") or "paper"), max_bytes=80)
+    asset_name = safe_stem(source_asset.stem, max_bytes=120) + source_asset.suffix.lower()
+    relative = Path("extracts") / "papers" / "assets" / attachment_key / task["sha256"][:12] / asset_name
+    destination = config["vault"] / relative
+    if not destination.is_file() or file_sha256(destination) != file_sha256(source_asset):
+        atomic_write_bytes(destination, source_asset.read_bytes())
+    return relative.as_posix()
+
+
+def mineru_caption_lines(item: Dict[str, Any], key: str) -> List[str]:
+    value = item.get(key, [])
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(entry).strip() for entry in value if str(entry).strip()]
+
+
+def render_mineru_item(
+    config: Dict[str, Any],
+    task: Dict[str, Any],
+    parse_dir: Path,
+    item: Dict[str, Any],
+) -> str:
+    item_type = str(item.get("type", "")).casefold()
+    if item_type in {"header", "footer", "page_number"}:
+        return ""
+
+    text = str(item.get("text", "")).strip()
+    if item_type == "text":
+        level = item.get("text_level")
+        if isinstance(level, int) and level > 0:
+            return f"{'#' * min(level + 2, 6)} {text}" if text else ""
+        return text
+    if item_type in {"equation", "interline_equation"}:
+        if not text:
+            return ""
+        if text.startswith("$$") and text.endswith("$$"):
+            return text
+        return f"$$\n{text}\n$$"
+    if item_type in {"list", "index"}:
+        entries = item.get("list_items", [])
+        if isinstance(entries, str):
+            entries = [entries]
+        if isinstance(entries, list):
+            rendered = [f"- {str(entry).strip()}" for entry in entries if str(entry).strip()]
+            return "\n".join(rendered)
+        return text
+    if item_type == "code":
+        code = str(item.get("code_body", text)).strip()
+        return f"```\n{code}\n```" if code else ""
+
+    visual_keys = {
+        "image": ("image_caption", "image_footnote"),
+        "chart": ("chart_caption", "chart_footnote"),
+        "table": ("table_caption", "table_footnote"),
+    }
+    if item_type in visual_keys:
+        caption_key, footnote_key = visual_keys[item_type]
+        captions = mineru_caption_lines(item, caption_key)
+        footnotes = mineru_caption_lines(item, footnote_key)
+        parts: List[str] = []
+        if captions:
+            parts.append("\n\n".join(f"**{caption}**" for caption in captions))
+        if item_type == "table":
+            table_body = str(item.get("table_body", "")).strip()
+            if table_body:
+                parts.append(table_body)
+        elif item_type == "chart":
+            chart_content = str(item.get("content", "")).strip()
+            if chart_content:
+                parts.append(chart_content)
+        image_path = safe_mineru_asset(config, task, parse_dir, item.get("img_path"))
+        if image_path:
+            alt = captions[0].replace("[", "").replace("]", "") if captions else item_type
+            parts.append(f"![{alt}]({image_path})")
+        if footnotes:
+            parts.append("\n".join(f"> {footnote}" for footnote in footnotes))
+        return "\n\n".join(parts)
+
+    if item_type in {"page_footnote", "aside_text"}:
+        return f"> {text}" if text else ""
+    return text
+
+
+def extract_pdf_with_mineru(config: Dict[str, Any], task: Dict[str, Any]) -> str:
+    source = config["vault"] / task["source_path"]
+    backend = str(config.get("mineru_backend", "pipeline")).strip()
+    method = str(config.get("mineru_method", "auto")).strip()
+    command = [
+        str(config["mineru_path"]),
+        "-p",
+        str(source),
+        "-o",
+        "OUTPUT_DIRECTORY",
+        "-b",
+        backend,
+        "-m",
+        method,
+        "-f",
+        "true" if config.get("mineru_formula", True) else "false",
+        "-t",
+        "true" if config.get("mineru_table", True) else "false",
     ]
-    for page_number, page in enumerate(pages, start=1):
-        page = page.strip()
-        if not page:
-            continue
-        lines.extend([f"## Page {page_number}", "", page, ""])
-    atomic_write_text(destination, "\n".join(lines).rstrip() + "\n")
+    language = str(config.get("mineru_language", "")).strip()
+    if language:
+        command.extend(["-l", language])
+
+    environment = configured_environment(config)
+    model_source = str(config.get("mineru_model_source", "")).strip()
+    if model_source:
+        environment["MINERU_MODEL_SOURCE"] = model_source
+    model_cache = str(config.get("mineru_model_cache", "")).strip()
+    if model_cache:
+        cache_root = Path(model_cache).expanduser().resolve()
+        cache_root.mkdir(parents=True, exist_ok=True)
+        environment["MODELSCOPE_CACHE"] = str(cache_root / "modelscope")
+        environment["HF_HOME"] = str(cache_root / "huggingface")
+
+    with tempfile.TemporaryDirectory(prefix="knowledge-mineru-") as directory:
+        output_root = Path(directory) / "output"
+        command[command.index("OUTPUT_DIRECTORY")] = str(output_root)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=int(config.get("mineru_timeout_seconds", 1800)),
+                cwd=str(config["vault"]),
+            )
+        except FileNotFoundError as error:
+            raise RuntimeError(f"MinerU executable not found: {config['mineru_path']}") from error
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("MinerU extraction timed out") from error
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "MinerU failed"
+            raise RuntimeError(detail[-4000:])
+
+        content_list_path = mineru_output_file(output_root, source, "_content_list.json")
+        content_list = read_json(content_list_path, None)
+        if not isinstance(content_list, list):
+            raise RuntimeError("MinerU content list is not a JSON array")
+        parse_dir = content_list_path.parent
+        pages: Dict[int, List[str]] = {}
+        for item in content_list:
+            if not isinstance(item, dict):
+                continue
+            try:
+                page_number = int(item.get("page_idx")) + 1
+            except (TypeError, ValueError):
+                raise RuntimeError("MinerU content item is missing page_idx")
+            rendered = render_mineru_item(config, task, parse_dir, item).strip()
+            if rendered:
+                pages.setdefault(page_number, []).append(rendered)
+        page_documents = [
+            (page_number, "\n\n".join(parts)) for page_number, parts in sorted(pages.items())
+        ]
+        markdown = extracted_document(
+            task,
+            page_documents,
+            "mineru",
+            pdf_extractor_signature(config),
+        )
+
+    visible_chars = len(re.sub(r"\s+", "", "\n".join(text for _, text in page_documents)))
+    if visible_chars < int(config.get("minimum_extracted_characters", 1200)):
+        raise ValueError(f"needs_ocr: MinerU extracted only {visible_chars} non-whitespace characters")
+    return markdown
+
+
+def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
+    vault = config["vault"]
+    destination = vault / task["extract_path"]
+    marker = f"source_sha256: {task['sha256']}"
+    signature = pdf_extractor_signature(config)
+    signature_marker = f"extractor_signature: {signature}"
+    if destination.exists():
+        head = destination.read_text(encoding="utf-8", errors="ignore")[:1500]
+        if marker in head and signature_marker in head:
+            return destination
+
+    extractor = str(config.get("pdf_extractor", "pdftotext")).strip().casefold()
+    if extractor == "mineru":
+        try:
+            markdown = extract_pdf_with_mineru(config, task)
+        except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as mineru_error:
+            if not config.get("mineru_fallback_to_pdftotext", True):
+                raise
+            log(f"MinerU extraction failed; falling back to pdftotext: {mineru_error}")
+            try:
+                markdown = extract_pdf_with_pdftotext(config, task)
+            except ValueError as fallback_error:
+                raise ValueError(f"needs_ocr: MinerU failed ({mineru_error}); {fallback_error}") from fallback_error
+    else:
+        markdown = extract_pdf_with_pdftotext(config, task)
+    atomic_write_text(destination, markdown)
     return destination
 
 
@@ -520,13 +776,7 @@ def codex_command(config: Dict[str, Any], prompt: str, result_name: str) -> subp
         str(result_path),
         prompt,
     ]
-    environment = os.environ.copy()
-    proxy_url = str(config.get("proxy_url", "")).strip()
-    if proxy_url:
-        for key in ("all_proxy", "http_proxy", "https_proxy", "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"):
-            environment[key] = proxy_url
-        environment.setdefault("no_proxy", "localhost,127.0.0.1")
-        environment.setdefault("NO_PROXY", "localhost,127.0.0.1")
+    environment = configured_environment(config)
     return subprocess.run(
         command,
         capture_output=True,

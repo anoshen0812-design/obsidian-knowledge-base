@@ -1,6 +1,7 @@
 const {
   MarkdownRenderer,
   MarkdownView,
+  Modal,
   Notice,
   Plugin,
   TFile,
@@ -19,6 +20,7 @@ try {
 const PLUGIN_VERSION = "0.4.0";
 const DEFAULT_CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex";
 const MAX_NOTE_CHARACTERS = 120000;
+const MAX_REVIEW_NOTE_CHARACTERS = 16000;
 const MAX_SELECTION_CHARACTERS = 16000;
 const MAX_OUTLINK_NOTES = 12;
 const MAX_OUTLINK_CHARACTERS = 16000;
@@ -26,6 +28,7 @@ const MAX_OUTLINK_TOTAL_CHARACTERS = 64000;
 const MAX_STORED_MESSAGES = 80;
 const MAX_ATTACHMENTS = 8;
 const MAX_IMAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const REVIEW_TURN_TIMEOUT_MS = 6 * 60 * 1000;
 const PANEL_MARGIN = 12;
 const PANEL_MIN_WIDTH = 340;
 const PANEL_MIN_HEIGHT = 360;
@@ -152,7 +155,7 @@ function normalizeLinkTarget(value) {
   const text = String(value).trim();
   const wikiMatch = text.match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/);
   const target = wikiMatch ? wikiMatch[1] : text;
-  return target.split("#", 1)[0].trim();
+  return target.split("#", 1)[0].trim().replace(/\\/g, "/");
 }
 
 function errorMessage(error) {
@@ -236,10 +239,114 @@ function completeReviewInMarkdown(text, timestamp) {
   return updated;
 }
 
+// OPTIONAL FEATURE START: review-patch parsing and safe application helpers.
 function parseReviewStatus(text) {
   const match = String(text || "").match(/REVIEW_STATUS:\s*(PASS|BLOCKED)/i);
   return match ? match[1].toLowerCase() : "unknown";
 }
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isPendingPdfLink(anchor) {
+  if (!anchor || String(anchor.textContent || "").replace(/\s+/g, "") !== "PDF页码待人工核对") return false;
+  const target = normalizeLinkTarget(anchor.getAttribute("data-href") || "");
+  return Boolean(target && /\.pdf$/i.test(target));
+}
+
+function isEditablePdfSourceLink(anchor) {
+  if (!anchor) return false;
+  const label = String(anchor.textContent || "").trim();
+  const target = normalizeLinkTarget(anchor.getAttribute("data-href") || "");
+  return Boolean(target && /\.pdf$/i.test(target) && (label === "PDF 页码待人工核对" || /^PDF\s+p\.\d+$/i.test(label)));
+}
+
+function pendingPdfOccurrences(markdown, target) {
+  const pattern = new RegExp(
+    `\\[\\[${escapeRegExp(target)}(?:#[^\\]|]+)?\\|PDF\\s*页码待人工核对\\]\\]`,
+    "g"
+  );
+  return Array.from(String(markdown || "").matchAll(pattern));
+}
+
+function pdfSourceOccurrences(markdown, target, label) {
+  const pattern = new RegExp(
+    `\\[\\[${escapeRegExp(target)}(?:#[^\\]|]+)?\\|${escapeRegExp(label)}\\]\\]`,
+    "g"
+  );
+  return Array.from(String(markdown || "").matchAll(pattern));
+}
+
+function parseReviewPatch(text) {
+  const match = String(text || "").match(/```review_patch\s*([\s\S]*?)```/i);
+  if (!match) return null;
+  try {
+    const candidate = JSON.parse(match[1].trim());
+    if (!candidate || typeof candidate !== "object") return null;
+    const replacements = Array.isArray(candidate.replacements)
+      ? candidate.replacements
+          .filter((item) => item && typeof item.find === "string" && typeof item.replace === "string")
+          .map((item) => ({ find: item.find, replace: item.replace }))
+          .filter(
+            (item) =>
+              item.find.trim() &&
+              item.find !== item.replace &&
+              item.find.length <= 6000 &&
+              item.replace.length <= 6000
+          )
+          .slice(0, 12)
+      : [];
+    const taskCompletions = Array.isArray(candidate.task_completions)
+      ? candidate.task_completions
+          .filter((item) => typeof item === "string" && item.trim() && item.length <= 1500)
+          .slice(0, 12)
+      : [];
+    return replacements.length || taskCompletions.length ? { replacements, taskCompletions } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeReviewTaskText(value) {
+  return String(value || "")
+    .replace(/\[\[[^\]]+\]\]/g, "")
+    .replace(/\s+/g, "")
+    .replace(/[。；;，,]+$/g, "")
+    .trim();
+}
+
+function applyReviewPatch(text, patch) {
+  let updated = text;
+  for (const replacement of patch.replacements || []) {
+    const first = updated.indexOf(replacement.find);
+    const second = first < 0 ? -1 : updated.indexOf(replacement.find, first + replacement.find.length);
+    if (first < 0 || second >= 0) {
+      throw new Error("复核修正无法唯一定位原文；请重新复核后再应用。");
+    }
+    updated = `${updated.slice(0, first)}${replacement.replace}${updated.slice(first + replacement.find.length)}`;
+  }
+  for (const taskText of patch.taskCompletions || []) {
+    const lines = updated.split("\n");
+    const matches = [];
+    const expected = normalizeReviewTaskText(taskText);
+    for (let index = 0; index < lines.length; index += 1) {
+      const match = lines[index].match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/);
+      if (match && normalizeReviewTaskText(match[2]) === expected) {
+        matches.push({ index, completed: match[1].toLowerCase() === "x" });
+      }
+    }
+    if (matches.length !== 1) {
+      throw new Error("复核任务无法唯一定位；请重新复核后再应用。");
+    }
+    if (!matches[0].completed) {
+      lines[matches[0].index] = lines[matches[0].index].replace(/\[ \]/, "[x]");
+    }
+    updated = lines.join("\n");
+  }
+  return updated;
+}
+// OPTIONAL FEATURE END: review-patch parsing and safe application helpers.
 
 function pairConversationMessages(messages) {
   const pairs = [];
@@ -352,6 +459,9 @@ class CodexAppServer {
       env: environment,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      // Windows cannot spawn a .cmd/.bat launcher directly without a shell.
+      // Prefer a native executable in config, but keep existing launcher paths usable.
+      shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(this.codexPath),
     });
     this.process = child;
 
@@ -513,6 +623,8 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
         includeSelection: false,
         includeOutlinks: false,
         contextCollapsed: false,
+        model: "",
+        reasoningEffort: "medium",
         sessions: {},
         window: {},
       },
@@ -533,6 +645,9 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     this.selectionProbeTimer = null;
     this.dragState = null;
     this.resizeState = null;
+    this.pendingPageAssignment = null;
+    this.pendingPdfOpeningAnchors = new WeakSet();
+    this.lastMarkdownLeaf = null;
 
     const runtime = await this.loadRuntimeConfig();
     this.server = new CodexAppServer({
@@ -543,6 +658,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
       onStatus: (message, isError = false) => this.setConnectionStatus(message, isError),
     });
 
+    // OPTIONAL FEATURE START: PDF source selection and write-back commands.
     this.addCommand({
       id: "open-note-chat",
       name: "打开当前笔记的 Codex 问答",
@@ -552,8 +668,53 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
         else new Notice("请先打开一个 Markdown 笔记");
       },
     });
+    this.addRibbonIcon("message-circle-question", "打开 Codex 笔记问答", () => {
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (view) this.toggleForView(view);
+      else new Notice("请先打开一个 Markdown 笔记");
+    });
+    this.addCommand({
+      id: "fill-pending-pdf-page",
+      name: "加入当前 PDF 整页来源",
+      callback: () => this.addPendingPdfPage(),
+    });
+    this.addRibbonIcon("file-plus-2", "加入当前 PDF 整页来源", () => {
+      this.addPendingPdfPage();
+    });
+    this.addCommand({
+      id: "fill-pending-pdf-selection",
+      name: "加入所选 PDF 原文来源",
+      callback: () => this.addPendingPdfSelection(),
+    });
+    this.addRibbonIcon("text-quote", "加入所选 PDF 原文来源", () => {
+      this.addPendingPdfSelection();
+    });
+    this.addCommand({
+      id: "apply-pending-pdf-sources",
+      name: "写入已选 PDF 来源到笔记",
+      callback: () => this.applyPendingPdfSources(),
+    });
+    this.addRibbonIcon("check-check", "写入已选 PDF 来源到笔记", () => {
+      this.applyPendingPdfSources();
+    });
+    this.addCommand({
+      id: "choose-pdf-source-target",
+      name: "选择要回填或修改的 PDF 来源",
+      callback: () => this.choosePdfSourceTarget(),
+    });
+    this.addRibbonIcon("list-checks", "选择要回填或修改的 PDF 来源", () => {
+      this.choosePdfSourceTarget();
+    });
+    // OPTIONAL FEATURE END: PDF source selection and write-back commands.
 
     this.registerEvent(this.app.workspace.on("layout-change", () => this.ensureHeaderButtons()));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf && leaf.view instanceof MarkdownView && leaf.view.file instanceof TFile) {
+          this.lastMarkdownLeaf = leaf;
+        }
+      })
+    );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         this.ensureHeaderButtons();
@@ -576,6 +737,45 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     );
     this.registerDomEvent(window, "resize", () => this.constrainPanelToViewport());
     this.registerDomEvent(document, "selectionchange", () => this.scheduleSelectionProbe());
+    this.registerDomEvent(
+      document,
+      "pointerdown",
+      (event) => {
+        const target = event.target;
+        const anchor = target instanceof Element ? target.closest("a") : null;
+        if (!isEditablePdfSourceLink(anchor)) return;
+        // A new explicit click always supersedes any earlier pending assignment.
+        // This prevents a stale first-pending-link assignment from being reused.
+        this.pendingPageAssignment = null;
+        if (!isPendingPdfLink(anchor)) {
+          // Existing PDF p.N links contain Obsidian's selection coordinates.
+          // Keep the native navigation so the original highlighted text appears.
+          this.pendingPdfOpeningAnchors.add(anchor);
+          void this.captureExistingPdfSourceLink(anchor);
+          return;
+        }
+        // Run before Obsidian's link navigation.  Capturing at click time was
+        // occasionally too late, leaving the PDF open without an assignment.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.pendingPdfOpeningAnchors.add(anchor);
+        void this.openPendingPdfLink(event, anchor);
+      },
+      true
+    );
+    this.registerDomEvent(
+      document,
+      "click",
+      (event) => {
+        const target = event.target;
+        const anchor = target instanceof Element ? target.closest("a") : null;
+        if (anchor && this.pendingPdfOpeningAnchors.has(anchor)) {
+          return;
+        }
+        if (anchor) void this.openPendingPdfLink(event, anchor);
+      },
+      true
+    );
 
     this.app.workspace.onLayoutReady(() => this.ensureHeaderButtons());
   }
@@ -596,6 +796,401 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
 
   get basePath() {
     return this.app.vault.adapter.getBasePath();
+  }
+
+  async openPendingPdfLink(event, anchor) {
+    if (!isEditablePdfSourceLink(anchor)) return;
+    const shouldOpenPdf = isPendingPdfLink(anchor);
+    if (shouldOpenPdf) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    // Do not resolve the note after an await: Obsidian may already have made the
+    // PDF tab active by then.  The link's containing Markdown leaf is the source
+    // of truth, with the active leaf only as a fallback.
+    const noteLeaf = this.app.workspace
+      .getLeavesOfType("markdown")
+      .find((leaf) => leaf.view instanceof MarkdownView && leaf.view.containerEl.contains(anchor));
+    const noteView = noteLeaf ? noteLeaf.view : this.app.workspace.getActiveViewOfType(MarkdownView);
+    const noteFile = noteView && noteView.file;
+    if (!(noteFile instanceof TFile)) return;
+    const target = normalizeLinkTarget(anchor.getAttribute("data-href") || "");
+    const label = String(anchor.textContent || "").trim();
+    const raw = await this.app.vault.read(noteFile);
+    const occurrences = pdfSourceOccurrences(raw, target, label);
+    if (occurrences.length === 0) return;
+
+    const root =
+      anchor.closest(".markdown-reading-view, .markdown-preview-view, .markdown-source-view") ||
+      document;
+    const visibleLinks = Array.from(root.querySelectorAll("a")).filter(
+      (candidate) =>
+        isEditablePdfSourceLink(candidate) &&
+        String(candidate.textContent || "").trim() === label &&
+        normalizeLinkTarget(candidate.getAttribute("data-href") || "") === target
+    );
+    const occurrence = visibleLinks.indexOf(anchor);
+    if (occurrence < 0 || occurrence >= occurrences.length) {
+      new Notice("无法定位这条待核对来源；请刷新笔记后重试。");
+      return;
+    }
+    const pdfFile = this.app.metadataCache.getFirstLinkpathDest(target, noteFile.path);
+    if (!(pdfFile instanceof TFile)) {
+      new Notice("未找到对应 PDF 文件，无法回填页码。");
+      return;
+    }
+
+    const pdfLeaf = shouldOpenPdf ? this.app.workspace.getLeaf("tab") : null;
+    this.pendingPageAssignment = {
+      noteFile,
+      noteLeaf: noteLeaf || this.app.workspace.activeLeaf,
+      noteMtime: noteFile.stat.mtime,
+      target,
+      linkLabel: label,
+      replacingExistingSource: label !== "PDF 页码待人工核对",
+      occurrence,
+      pdfLeaf,
+      selections: [],
+    };
+    if (pdfLeaf) {
+      await pdfLeaf.openFile(pdfFile);
+      new Notice("已锁定这条待核对来源。可连续加入多个整页或原文段落，最后点击“写入已选 PDF 来源”。");
+    }
+  }
+
+  async captureExistingPdfSourceLink(anchor) {
+    const passiveEvent = { preventDefault() {}, stopPropagation() {} };
+    await this.openPendingPdfLink(passiveEvent, anchor);
+    if (!this.pendingPageAssignment) return;
+    const label = this.pendingPageAssignment.linkLabel || "当前来源";
+    // The native click changes tabs immediately. Delay the confirmation so it is
+    // visible on the PDF page rather than disappearing on the source note.
+    window.setTimeout(() => {
+      if (this.pendingPageAssignment && this.pendingPageAssignment.linkLabel === label) {
+        new Notice(`已锁定 ${label}；现在可加入整页或原文选区，完成后写入替换。`, 6500);
+      }
+    }, 350);
+  }
+
+  currentOpenPdf() {
+    const leaves = [this.app.workspace.activeLeaf, ...this.app.workspace.getLeavesOfType("pdf")]
+      .filter((leaf, index, list) => leaf && leaf.view && leaf.view.file instanceof TFile && list.indexOf(leaf) === index);
+    const pdfLeaf = leaves.find((leaf) => /\.pdf$/i.test(leaf.view.file.path)) || null;
+    return { pdfLeaf, pdfFile: pdfLeaf && pdfLeaf.view.file };
+  }
+
+  async collectPdfSourceCandidates(pdfFile) {
+    if (!(pdfFile instanceof TFile)) return [];
+    const openNoteLeaves = this.app.workspace.getLeavesOfType("markdown");
+    const candidates = [];
+    for (const noteFile of this.app.vault.getMarkdownFiles()) {
+      const data = await this.app.vault.read(noteFile);
+      const linkPattern = /\[\[([^\]|#]+)(?:#[^\]|]+)?\|([^\]]+)\]\]/g;
+      for (const match of data.matchAll(linkPattern)) {
+        const target = normalizeLinkTarget(match[1]);
+        const label = String(match[2] || "").trim();
+        if (label !== "PDF 页码待人工核对" && !/^PDF\s+p\.\d+$/i.test(label)) continue;
+        const resolved = this.app.metadataCache.getFirstLinkpathDest(target, noteFile.path);
+        const samePdf =
+          (resolved instanceof TFile && resolved.path === pdfFile.path) ||
+          target.split("/").pop() === pdfFile.name;
+        if (!samePdf) continue;
+        const occurrence = pdfSourceOccurrences(data, target, label).filter(
+          (candidate) => candidate.index !== undefined && candidate.index < match.index
+        ).length;
+        const lineStart = data.lastIndexOf("\n", match.index) + 1;
+        const lineEnd = data.indexOf("\n", match.index);
+        const context = data.slice(lineStart, lineEnd < 0 ? data.length : lineEnd)
+          .replace(/\[\[[^\]]+\]\]/g, "")
+          .replace(/[*_`]/g, "")
+          .replace(/^[-*]\s*/, "")
+          .trim();
+        // The provenance index is a navigation aid, not a claim to be edited.
+        if (/资料范围与证据索引/.test(context)) continue;
+        const priorLines = data.slice(0, match.index).split("\n");
+        const headingLine = [...priorLines]
+          .reverse()
+          .find((line) => /^#{1,6}\s+/.test(line.trim()));
+        const heading = headingLine ? headingLine.replace(/^#{1,6}\s+/, "").trim() : "笔记正文";
+        candidates.push({
+          noteFile,
+          noteLeaf: openNoteLeaves.find((leaf) => leaf.view && leaf.view.file === noteFile) || null,
+          target,
+          label,
+          occurrence,
+          heading,
+          context: context.length > 300 ? `${context.slice(0, 300)}…` : context,
+        });
+      }
+    }
+    return candidates;
+  }
+
+  async choosePdfSourceTarget() {
+    const { pdfLeaf, pdfFile } = this.currentOpenPdf();
+    if (!(pdfFile instanceof TFile)) {
+      new Notice("请先打开并激活要核对的 PDF。");
+      return;
+    }
+    const candidates = await this.collectPdfSourceCandidates(pdfFile);
+    if (!candidates.length) {
+      new Notice("当前 PDF 在笔记中没有可回填或可修改的来源链接。");
+      return;
+    }
+    const modal = new Modal(this.app);
+    modal.modalEl.style.width = "760px";
+    modal.modalEl.style.maxWidth = "90vw";
+    modal.titleEl.setText("选择要回填或修改的来源");
+    modal.contentEl.createEl("p", {
+      text: "请选择唯一目标。每张卡片显示该链接所在章节与段落内容；之后加入的页面或选区只会写入这一条来源。",
+    });
+    for (const candidate of candidates) {
+      const card = modal.contentEl.createDiv();
+      card.style.border = "1px solid var(--background-modifier-border)";
+      card.style.borderRadius = "7px";
+      card.style.padding = "10px";
+      card.style.marginBottom = "9px";
+      const title = card.createEl("div", {
+        text: `${candidate.label} · ${candidate.heading}`,
+      });
+      title.style.fontWeight = "700";
+      title.style.marginBottom = "6px";
+      const preview = card.createEl("div", {
+        text: candidate.context || candidate.noteFile.basename,
+      });
+      preview.style.whiteSpace = "normal";
+      preview.style.lineHeight = "1.45";
+      preview.style.marginBottom = "9px";
+      preview.style.color = "var(--text-muted)";
+      const button = card.createEl("button", { cls: "mod-cta", text: "选择此条来源" });
+      button.onclick = () => {
+        this.pendingPageAssignment = {
+          noteFile: candidate.noteFile,
+          noteLeaf: candidate.noteLeaf,
+          noteMtime: candidate.noteFile.stat.mtime,
+          target: candidate.target,
+          linkLabel: candidate.label,
+          replacingExistingSource: candidate.label !== "PDF 页码待人工核对",
+          occurrence: candidate.occurrence,
+          pdfLeaf,
+          selections: [],
+        };
+        modal.close();
+        new Notice(`已锁定：${candidate.label}。现在可加入页面或原文选区。`, 6500);
+      };
+    }
+    modal.open();
+  }
+
+  currentPdfPage(preferredLeaf = null) {
+    const leaves = [preferredLeaf, this.app.workspace.activeLeaf, ...this.app.workspace.getLeavesOfType("pdf")]
+      .filter(Boolean);
+    for (const leaf of leaves) {
+      const view = leaf.view || {};
+      const viewer =
+        (view.viewer && view.viewer.child && view.viewer.child.pdfViewer) ||
+        view.pdfViewer ||
+        (view.viewer && view.viewer.pdfViewer);
+      const page = Number(
+        viewer && (viewer.currentPageNumber || viewer.currentPage || viewer.pageNumber)
+      );
+      if (Number.isInteger(page) && page > 0) return page;
+
+      // Obsidian versions expose the PDF.js viewer differently.  The visible
+      // toolbar page input is stable even when the viewer object is private.
+      const inputs = Array.from(
+        (view.containerEl && view.containerEl.querySelectorAll("input")) || []
+      );
+      const values = inputs
+        .map((input) => Number(String(input.value || "").trim()))
+        .filter((value) => Number.isInteger(value) && value > 0 && value < 100000);
+      if (values.length) return values[0];
+
+      const toolbarText = String((view.containerEl && view.containerEl.textContent) || "");
+      const pageMatch = toolbarText.match(/(?:^|\s)(\d+)\s*\/\s*\d+(?:\s|$)/);
+      if (pageMatch) return Number(pageMatch[1]);
+    }
+    return 0;
+  }
+
+  async addPendingPdfPage() {
+    return this.addPendingPdfSource("page");
+  }
+
+  currentPdfSelection(leaf) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return "";
+    const container = leaf && leaf.view && leaf.view.containerEl;
+    if (container && (!container.contains(selection.anchorNode) || !container.contains(selection.focusNode))) {
+      return "";
+    }
+    const text = selection.toString().replace(/\s+/g, " ").trim();
+    return text.length > 900 ? `${text.slice(0, 900)}…` : text;
+  }
+
+  async addPendingPdfSelection() {
+    return this.addPendingPdfSource("selection");
+  }
+
+  async currentPdfSelectionLink(page) {
+    let clipboard = "";
+    try {
+      clipboard = String(await navigator.clipboard.readText()).trim();
+    } catch (_) {
+      // Obsidian may deny clipboard access until the user has used the native
+      // context-menu command.  The notice below explains the required action.
+    }
+    if (!clipboard) return "";
+    if (/^\[\[[\s\S]+\]\]$/.test(clipboard)) {
+      const match = clipboard.match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/);
+      return match ? `[[${match[1]}|PDF p.${page}]]` : "";
+    }
+    if (/^\[[\s\S]*\]\([^\n]+\)$/.test(clipboard)) {
+      const match = clipboard.match(/^\[[\s\S]*\]\(([^\n]+)\)$/);
+      return match ? `[PDF p.${page}](${match[1]})` : "";
+    }
+    if (/^obsidian:\/\//i.test(clipboard)) {
+      return `[PDF p.${page} · 原文定位](${clipboard})`;
+    }
+    return "";
+  }
+
+  async addPendingPdfSource(mode) {
+    let assignment = this.pendingPageAssignment;
+    if (!assignment) assignment = await this.restorePendingAssignmentFromOpenPdf();
+    if (!assignment) {
+      new Notice("未找到可回填的待审核来源。请先打开含“PDF 页码待人工核对”的笔记与对应 PDF。");
+      return;
+    }
+    const page = this.currentPdfPage(assignment.pdfLeaf);
+    if (!page) {
+      new Notice("未能读取当前 PDF 页码。请先激活 PDF 标签页并翻到目标页面。");
+      return;
+    }
+    const selectionLink = mode === "selection" ? await this.currentPdfSelectionLink(page) : "";
+    if (mode === "selection" && !selectionLink) {
+      new Notice("请先在 PDF 中划选原文，右键选择“复制到选区的链接”，再点击“加入所选 PDF 原文来源”。");
+      return;
+    }
+    if (assignment.noteFile.stat.mtime !== assignment.noteMtime) {
+      new Notice("笔记已在选页期间发生变化；为避免替换错误，请重新点击待核对链接。");
+      this.pendingPageAssignment = null;
+      return;
+    }
+    const selection = { page, selectionLink };
+    const duplicate = assignment.selections.some(
+      (item) => item.page === selection.page && item.selectionLink === selection.selectionLink
+    );
+    if (!duplicate) assignment.selections.push(selection);
+    const pages = [...new Set(assignment.selections.map((item) => item.page))].join("、");
+    new Notice(
+      duplicate
+        ? `PDF p.${page} 已在回填清单中（当前：p.${pages}）。`
+        : `已加入 ${mode === "selection" ? "原文选区链接" : "整页"}：PDF p.${page}（当前：p.${pages}）。可继续加入，完成后点“写入已选 PDF 来源”。`
+    );
+  }
+
+  async applyPendingPdfSources() {
+    let assignment = this.pendingPageAssignment;
+    if (!assignment) assignment = await this.restorePendingAssignmentFromOpenPdf();
+    if (!assignment) {
+      new Notice("未找到可回填的待审核来源。请先打开含“PDF 页码待人工核对”的笔记与对应 PDF。");
+      return;
+    }
+    if (!Array.isArray(assignment.selections) || assignment.selections.length === 0) {
+      new Notice("尚未加入页面或原文段落。请在 PDF 中定位后，使用左侧的“加入”按钮。");
+      return;
+    }
+    try {
+      const renderedSources = [];
+      for (let index = 0; index < assignment.selections.length; index += 1) {
+        const item = assignment.selections[index];
+        if (item.selectionLink) {
+          renderedSources.push(item.selectionLink);
+        } else {
+          renderedSources.push(`[[${assignment.target}#page=${item.page}|PDF p.${item.page}]]`);
+        }
+      }
+      await this.app.vault.process(assignment.noteFile, (data) => {
+        const occurrences = pdfSourceOccurrences(
+          data,
+          assignment.target,
+          assignment.linkLabel || "PDF 页码待人工核对"
+        );
+        const match = occurrences[assignment.occurrence];
+        if (!match || match.index === undefined) {
+          throw new Error("待核对来源的位置已变化");
+        }
+        const replacement = renderedSources.join("；");
+        return `${data.slice(0, match.index)}${replacement}${data.slice(match.index + match[0].length)}`;
+      });
+      this.pendingPageAssignment = null;
+      if (assignment.noteLeaf) {
+        this.app.workspace.setActiveLeaf(assignment.noteLeaf, true, true);
+      } else {
+        const returnLeaf = this.app.workspace.getLeaf("tab");
+        await returnLeaf.openFile(assignment.noteFile);
+      }
+      new Notice("已写入所选 PDF 来源，并返回笔记。");
+    } catch (error) {
+      new Notice(`回填页码失败：${errorMessage(error)}`);
+    }
+  }
+
+  async restorePendingAssignmentFromOpenPdf() {
+    const pdfLeaves = [this.app.workspace.activeLeaf, ...this.app.workspace.getLeavesOfType("pdf")]
+      .filter((leaf, index, list) => leaf && leaf.view && leaf.view.file instanceof TFile && list.indexOf(leaf) === index);
+    const pdfLeaf = pdfLeaves.find((leaf) => /\.pdf$/i.test(leaf.view.file.path));
+    const pdfFile = pdfLeaf && pdfLeaf.view.file;
+    if (!(pdfFile instanceof TFile)) return null;
+
+    const openNoteLeaves = this.app.workspace.getLeavesOfType("markdown");
+    const preferredFiles = [
+      this.lastMarkdownLeaf && this.lastMarkdownLeaf.view && this.lastMarkdownLeaf.view.file,
+      ...openNoteLeaves.map((leaf) => leaf.view && leaf.view.file),
+      ...this.app.vault.getMarkdownFiles(),
+    ].filter((file, index, list) => file instanceof TFile && list.indexOf(file) === index);
+    const allCandidates = [];
+    for (const noteFile of preferredFiles) {
+      const noteLeaf = openNoteLeaves.find((leaf) => leaf.view && leaf.view.file === noteFile) || null;
+      const data = await this.app.vault.read(noteFile);
+      const candidates = [];
+      const linkPattern = /\[\[([^\]|#]+)(?:#[^\]|]+)?\|PDF\s*页码待人工核对\]\]/g;
+      for (const match of data.matchAll(linkPattern)) {
+        const target = normalizeLinkTarget(match[1]);
+        const resolved = this.app.metadataCache.getFirstLinkpathDest(target, noteFile.path);
+        const samePdf =
+          (resolved instanceof TFile && resolved.path === pdfFile.path) ||
+          target.split("/").pop() === pdfFile.name;
+        if (samePdf) {
+          const occurrence = pendingPdfOccurrences(data, target).filter(
+            (candidate) => candidate.index !== undefined && candidate.index < match.index
+          ).length;
+          candidates.push({ noteFile, noteLeaf, data, target, occurrence });
+        }
+      }
+      allCandidates.push(...candidates);
+    }
+    if (allCandidates.length !== 1) {
+      if (allCandidates.length > 1) {
+        new Notice("存在多条待核对来源；为避免改错，请在笔记中点击要修改的那条 PDF 链接。");
+      }
+      return null;
+    }
+    const { noteFile, noteLeaf, target, occurrence } = allCandidates[0];
+    this.pendingPageAssignment = {
+      noteFile,
+      noteLeaf,
+      noteMtime: noteFile.stat.mtime,
+      target,
+      linkLabel: "PDF 页码待人工核对",
+      replacingExistingSource: false,
+      occurrence,
+      pdfLeaf,
+      selections: [],
+    };
+    new Notice("已自动锁定唯一的待核对来源；可开始加入页面或原文段落。");
+    return this.pendingPageAssignment;
   }
 
   async loadRuntimeConfig() {
@@ -688,6 +1283,57 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     headerActions.append(newChatButton, closeButton);
     header.append(titleGroup, headerActions);
 
+    // OPTIONAL FEATURE START: model and reasoning selector.
+    const engineArea = createElement("section", "codex-note-chat-engine");
+    const modelLabel = createElement("label", "codex-note-chat-engine-field", "模型");
+    const modelSelect = document.createElement("select");
+    modelSelect.className = "dropdown codex-note-chat-engine-select";
+    modelSelect.setAttribute("aria-label", "选择 Codex 模型");
+    for (const [value, label] of [
+      ["", "自动（默认）"],
+      ["gpt-5.6-terra", "GPT-5.6 Terra（平衡）"],
+      ["gpt-5.6-sol", "GPT-5.6 Sol（高质量）"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      modelSelect.appendChild(option);
+    }
+    modelSelect.value = this.state.model || "";
+    modelSelect.title = "选择模型；开始新对话后生效";
+    modelLabel.appendChild(modelSelect);
+
+    const reasoningLabel = createElement("label", "codex-note-chat-engine-field", "推理");
+    const reasoningSelect = document.createElement("select");
+    reasoningSelect.className = "dropdown codex-note-chat-engine-select";
+    reasoningSelect.setAttribute("aria-label", "选择推理强度");
+    for (const [value, label] of [
+      ["low", "低"],
+      ["medium", "中等（推荐）"],
+      ["high", "高"],
+      ["xhigh", "很高"],
+      ["max", "最高"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      reasoningSelect.appendChild(option);
+    }
+    reasoningSelect.value = this.state.reasoningEffort || "medium";
+    reasoningSelect.title = "选择推理强度；开始新对话后生效";
+    reasoningLabel.appendChild(reasoningSelect);
+
+    const saveEngineChoice = () => {
+      this.state.model = modelSelect.value;
+      this.state.reasoningEffort = reasoningSelect.value;
+      this.scheduleSave();
+      this.setConnectionStatus("模型设置已保存；开始新对话后生效");
+    };
+    modelSelect.addEventListener("change", saveEngineChoice);
+    reasoningSelect.addEventListener("change", saveEngineChoice);
+    engineArea.append(modelLabel, reasoningLabel);
+    // OPTIONAL FEATURE END: model and reasoning selector.
+
     const contextArea = createElement("section", "codex-note-chat-context");
     const contextTop = createElement("div", "codex-note-chat-context-top");
     const contextHeading = createElement("div", "codex-note-chat-context-heading");
@@ -753,6 +1399,10 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     const reviewButton = createElement("button", "codex-note-chat-review-button", "开始复核");
     reviewButton.type = "button";
     reviewButton.addEventListener("click", () => this.startReview());
+    const applyReviewButton = createElement("button", "codex-note-chat-secondary", "应用修正");
+    applyReviewButton.type = "button";
+    applyReviewButton.title = "将本次复核已确认的页码和文字修正安全写回笔记";
+    applyReviewButton.addEventListener("click", () => this.applyReviewPatch());
     const completeReviewButton = createElement(
       "button",
       "mod-cta codex-note-chat-review-complete",
@@ -761,7 +1411,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     completeReviewButton.type = "button";
     completeReviewButton.title = "仅在 Codex 逐项复核通过后可用";
     completeReviewButton.addEventListener("click", () => this.completeReview());
-    reviewActions.append(reviewButton, completeReviewButton);
+    reviewActions.append(reviewButton, applyReviewButton, completeReviewButton);
     reviewArea.append(reviewCopy, reviewActions);
 
     const messages = createElement("div", "codex-note-chat-messages");
@@ -834,12 +1484,14 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
       }
     );
 
-    panel.append(header, contextArea, reviewArea, messages, composer, ...resizeHandles);
+    panel.append(header, engineArea, contextArea, reviewArea, messages, composer, ...resizeHandles);
     document.body.appendChild(panel);
     this.panel = panel;
     this.refs = {
       header,
       noteTitle,
+      modelSelect,
+      reasoningSelect,
       contextArea,
       contextBody,
       contextSummary,
@@ -862,6 +1514,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
       sendButton,
       newChatButton,
       reviewButton,
+      applyReviewButton,
       completeReviewButton,
       reviewStatus,
     };
@@ -1396,6 +2049,9 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
         review.status === "pass" &&
         review.sourceMtime === fileMtime
     );
+    const patchIsCurrent = Boolean(
+      review && review.patch && review.sourceMtime === fileMtime
+    );
     const busy = Boolean(this.activeTurn || this.refs.input.disabled);
 
     if (info.reviewed || (review && review.status === "completed")) {
@@ -1417,6 +2073,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     const canReview = info.hasSection && info.total > 0 && !info.reviewed;
     this.refs.reviewButton.disabled = busy || !canReview;
     this.refs.reviewButton.textContent = review ? "重新复核" : "开始复核";
+    this.refs.applyReviewButton.disabled = busy || info.reviewed || !patchIsCurrent;
     this.refs.completeReviewButton.disabled = busy || info.reviewed || !passIsCurrent;
   }
 
@@ -1576,10 +2233,14 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
       const prompt = await this.buildPrompt(
         question,
         options.extraInstructions || "",
-        attachments
+        attachments,
+        { noteLimit: kind === "review" ? MAX_REVIEW_NOTE_CHARACTERS : MAX_NOTE_CHARACTERS }
       );
       const threadId = await this.ensureThread(session);
-      const finalText = await this.runTurn(threadId, prompt, streamingMessage, attachments);
+      const finalText = await this.runTurn(threadId, prompt, streamingMessage, attachments, {
+        timeoutMs: kind === "review" ? REVIEW_TURN_TIMEOUT_MS : 0,
+        timeoutMessage: "人工复核已超过 6 分钟，已停止本轮。请缩小复核范围或改用较低推理强度后重试。",
+      });
       const assistantMessage = {
         role: "assistant",
         kind,
@@ -1588,8 +2249,10 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
       };
       if (kind === "review") {
         assistantMessage.reviewStatus = parseReviewStatus(assistantMessage.text);
+        assistantMessage.reviewPatch = parseReviewPatch(assistantMessage.text);
         session.review = {
           status: assistantMessage.reviewStatus,
+          patch: assistantMessage.reviewPatch,
           sourceMtime: reviewSourceMtime,
           at: assistantMessage.at,
         };
@@ -1612,10 +2275,11 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     }
   }
 
-  async buildPrompt(question, extraInstructions = "", attachments = []) {
+  async buildPrompt(question, extraInstructions = "", attachments = [], options = {}) {
+    const noteLimit = Number(options.noteLimit) || MAX_NOTE_CHARACTERS;
     const noteText = truncateText(
       await this.app.vault.cachedRead(this.context.file),
-      MAX_NOTE_CHARACTERS,
+      noteLimit,
       "当前笔记"
     );
     const selectedText = this.refs.selectionInput.checked
@@ -1703,13 +2367,54 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
       question: "请逐项处理当前笔记的“人工复核”清单，并判断是否可以完成审核。",
       extraInstructions: [
         "这是一次受控的文献人工复核。定位当前笔记中标题为“人工复核”的任务清单，逐项处理。",
-        "必须直接读取并核对 context_paths 中的来源 PDF；不得只根据当前笔记复述。",
-        "每一项都给出：任务、结论（通过/需修正/无法核实）、依据、准确页码或图表位置、必要的修正建议。",
+        "必须直接读取并核对 context_paths 中的来源 PDF；不得只根据当前笔记复述。每项只定位完成判断所必需的原文页或图表，不要通读整篇 PDF，也不要重复读取同一页。",
+        "每一项都给出：任务、结论（通过/需修正/无法核实）、依据、准确页码或图表位置、必要的修正建议。每项限 180 个中文字符以内。",
         "区分 PDF 明示证据、笔记转述和你的推断；补充信息不可用时不得假定其内容。",
+        "若任务要求原始重复试验数据、未公开的误差棒数值或其他论文附件中不存在的资料，立即结论为“无法核实/阻塞”，说明缺少何种资料后停止该项；不得联网搜索、猜测或反复尝试。",
         "只有所有任务均已得到充分证据支持、没有待修正或无法核实项时，才可判定通过。",
+        "在隐藏状态标记之前，额外输出一个且仅一个 ```review_patch JSON 代码块。JSON 格式为 {\"replacements\":[{\"find\":\"笔记中需要替换的完整原文\",\"replace\":\"修正后的完整文字\"}],\"task_completions\":[\"已完全核实且可勾选的人工复核任务原文，不含 - [ ] 前缀\"]}。只包含能由本次 PDF 证据精确支持的修正；找不到唯一原文、仍需人工决定或证据不足时，不得写入 replacements 或 task_completions，对应数组可为空。",
         "回答末尾必须单独输出且只输出以下两个隐藏标记之一：<!-- REVIEW_STATUS: PASS --> 或 <!-- REVIEW_STATUS: BLOCKED -->。",
       ].join("\n"),
     });
+  }
+
+  async applyReviewPatch() {
+    if (this.activeTurn || !this.boundFile || !this.context) return;
+    const session = this.getSession(this.boundFile.path);
+    const review = session.review || null;
+    const sourceMtime = this.boundFile.stat && this.boundFile.stat.mtime;
+    if (!review || !review.patch || review.sourceMtime !== sourceMtime) {
+      new Notice("没有可安全应用的当前复核修正；请重新复核。");
+      return;
+    }
+    const patch = review.patch;
+    const replacementCount = (patch.replacements || []).length;
+    const taskCount = (patch.taskCompletions || []).length;
+    if (
+      !window.confirm(
+        `将把 ${replacementCount} 处已核实文字写回笔记，并勾选 ${taskCount} 项已完成复核任务。未核实任务不会变更。是否继续？`
+      )
+    ) {
+      return;
+    }
+
+    const file = this.boundFile;
+    try {
+      if (typeof this.app.vault.process === "function") {
+        await this.app.vault.process(file, (data) => applyReviewPatch(data, patch));
+      } else {
+        const current = await this.app.vault.read(file);
+        await this.app.vault.modify(file, applyReviewPatch(current, patch));
+      }
+      session.review = null;
+      session.updatedAt = new Date().toISOString();
+      this.scheduleSave();
+      await this.refreshContext();
+      this.renderMessages();
+      new Notice("已写回已核实修正；笔记已变化，请重新复核剩余任务。");
+    } catch (error) {
+      new Notice(`应用复核修正失败：${errorMessage(error)}`);
+    }
   }
 
   async completeReview() {
@@ -1757,11 +2462,12 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
   }
 
   threadOptions() {
-    return {
+    const options = {
       cwd: this.basePath,
       approvalPolicy: "never",
       sandbox: "read-only",
       personality: "pragmatic",
+      reasoningEffort: this.state.reasoningEffort || "medium",
       ephemeral: false,
       developerInstructions: [
         "You are a read-only research Q&A assistant embedded in Obsidian.",
@@ -1771,6 +2477,8 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
         "Use source-linked, evidence-grounded answers and preserve uncertainty.",
       ].join(" "),
     };
+    if (this.state.model) options.model = this.state.model;
+    return options;
   }
 
   async ensureThread(session) {
@@ -1799,7 +2507,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     return session.threadId;
   }
 
-  runTurn(threadId, prompt, streamingMessage, attachments = []) {
+  runTurn(threadId, prompt, streamingMessage, attachments = [], options = {}) {
     return new Promise(async (resolve, reject) => {
       const active = {
         threadId,
@@ -1808,6 +2516,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
         streams: new Map(),
         finalText: "",
         fallbackText: "",
+        watchdogTimer: null,
         resolve,
         reject,
       };
@@ -1824,6 +2533,18 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
           30000
         );
         active.turnId = result.turn.id;
+        if (Number(options.timeoutMs) > 0) {
+          active.watchdogTimer = window.setTimeout(() => {
+            if (this.activeTurn !== active) return;
+            this.server
+              .request("turn/interrupt", { threadId, turnId: active.turnId }, 15000)
+              .catch(() => {});
+            this.finishActiveTurn(
+              null,
+              new Error(options.timeoutMessage || "本轮请求超时，已停止。")
+            );
+          }, Number(options.timeoutMs));
+        }
       } catch (error) {
         if (this.activeTurn === active) this.activeTurn = null;
         reject(error);
@@ -1881,6 +2602,7 @@ module.exports = class CodexNoteChatPlugin extends Plugin {
     const active = this.activeTurn;
     if (!active) return;
     this.activeTurn = null;
+    if (active.watchdogTimer) window.clearTimeout(active.watchdogTimer);
     if (error) active.reject(error);
     else active.resolve(text || "");
   }

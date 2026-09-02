@@ -50,7 +50,7 @@ Impact Factor Source: Journal Citation Reports
 `sources/literature/manifests/supporting-information.json`。SI 失败不会阻断主论文同步，
 未找到时会按 `retry_days` 延迟重试，已找到的文件按 `refresh_days` 检查更新。
 
-SI 不会作为新论文加入知识队列，也不会默认进入模型上下文。PaperForge 仅在主文
+SI 不会作为新论文加入知识队列，也不会默认进入模型上下文。Forge Paper Note 仅在主文
 明确指向 SI 且某个具体方法、数值、图表或推导无法从主文核实时，才读取相关 SI 页。
 
 Zotero 和 Obsidian 必须处于运行状态，并启用“允许其他应用与 Zotero 通信”。

@@ -16,8 +16,11 @@ Obsidian exposes equivalent commands. Automatic ingest processes one source at a
 
 Paper extraction uses MinerU by default. Its structured content list is regrouped by
 `page_idx`, preserving formulas, tables, figures, captions, and `## Page N` evidence
-boundaries in `extracts/papers/*.md`. Extracted images are copied to
-`extracts/papers/assets/<attachment-key>/<source-hash>/`. `pdftotext -layout` remains
+boundaries in `extracts/papers/*.md`. MinerU's complete extraction cache is kept in
+`extracts/papers/assets/<attachment-key>/<source-hash>/`. Images actually selected for
+a note are copied to `wiki/papers/images/<exact-note-stem>/`; each note records that
+directory in its `images_dir` property and may only embed assets from its own directory.
+`pdftotext -layout` remains
 an automatic fallback if MinerU is unavailable, times out, fails, or produces too little
 content. A task is marked `needs_ocr` only when the fallback also produces insufficient
 text.
@@ -32,7 +35,7 @@ The important parser settings in `config.json` are:
 - `mineru_fallback_to_pdftotext`: keep `true` for unattended operation.
 
 If Zotero sync has cached supporting-information PDFs, their paths and availability
-are attached to the paper task. They are not extracted by default. PaperForge opens SI
+are attached to the paper task. They are not extracted by default. Forge Paper Note opens SI
 only for a specific claim that the primary paper explicitly delegates to SI, and cites
 the exact SI page when used.
 
@@ -43,12 +46,16 @@ Paper frontmatter always includes `impact_factor`, `impact_factor_year`, and
 official publisher or Clarivate pages and records `impact_factor_retrieved_at`;
 unavailable values remain explicit YAML `null` values.
 
-## PaperForge paper reading
+## Forge Paper Note paper reading
 
-Install the pinned upstream PaperForge skill and the vault adapter before processing papers:
+The automated paper task uses the local `forge-paper-note` skill exclusively. Verify the
+local installation before processing papers:
 
 ```bash
-python3 scripts/install-paperforge-skills.py
+python3 scripts/check-forge-paper-note.py
 ```
 
-The installer downloads `SKILL_CHN.md` from a pinned PaperForge commit, verifies its checksum, and installs it as the standard `paper-reading-zh/SKILL.md`. Upstream PaperForge content is not vendored in this repository.
+The check requires `$CODEX_HOME/skills/forge-paper-note/SKILL.md` plus its deterministic
+figure, lint, and save scripts. The skill itself is device-local and is not vendored in this
+repository. Set `forge_python_path` in `config.json` to a Python 3.10+ interpreter; the
+runner passes that exact interpreter to unattended Forge tasks.

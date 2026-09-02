@@ -1,6 +1,7 @@
 {
   "codex_path": "/path/to/codex",
   "codex_timeout_seconds": 1200,
+  "forge_python_path": "/path/to/python-3.10-or-newer",
   "minimum_extracted_characters": 1200,
   "mineru_backend": "pipeline",
   "mineru_fallback_to_pdftotext": true,
@@ -13,8 +14,7 @@
   "mineru_table": true,
   "mineru_timeout_seconds": 1800,
   "paper_reading_skills": [
-    "paper-reading-zh",
-    "paperforge-vault-note"
+    "forge-paper-note"
   ],
   "pdf_extractor": "mineru",
   "pdftotext_path": "/path/to/pdftotext",

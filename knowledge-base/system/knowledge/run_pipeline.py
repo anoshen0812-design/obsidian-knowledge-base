@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from urllib.parse import unquote
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
+PAPER_IMAGES_ROOT = Path("wiki") / "papers" / "images"
+PAPER_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 
 
 def now_iso() -> str:
@@ -113,10 +116,26 @@ def paper_note_identity(metadata: Dict[str, Any], generated_date: str) -> Dict[s
     first_author = str(creators[0]).strip() if creators else "Unknown author"
     title = plain_title(metadata.get("title"))
     display_title = f"{generated_date} - {first_author} - {title}"
+    note_stem = safe_stem(display_title, max_bytes=220)
+    image_asset_subdir = (Path("images") / note_stem).as_posix()
     return {
         "display_title": display_title,
         "first_author": first_author,
-        "note_path": f"wiki/papers/{safe_stem(display_title, max_bytes=220)}.md",
+        "note_path": f"wiki/papers/{note_stem}.md",
+        "images_dir": (Path("wiki") / "papers" / image_asset_subdir).as_posix(),
+        "image_asset_subdir": image_asset_subdir,
+    }
+
+
+def paper_image_identity(note_path: str) -> Dict[str, str]:
+    relative_note = Path(str(note_path))
+    if relative_note.parent != Path("wiki") / "papers" or relative_note.suffix.casefold() != ".md":
+        raise RuntimeError(f"Paper note_path is outside wiki/papers: {note_path}")
+    note_stem = relative_note.stem
+    image_asset_subdir = (Path("images") / note_stem).as_posix()
+    return {
+        "images_dir": (relative_note.parent / image_asset_subdir).as_posix(),
+        "image_asset_subdir": image_asset_subdir,
     }
 
 
@@ -129,7 +148,7 @@ def load_config() -> Dict[str, Any]:
 
 
 def required_paper_skills(config: Dict[str, Any]) -> List[str]:
-    values = config.get("paper_reading_skills", ["paper-reading-zh", "paperforge-vault-note"])
+    values = config.get("paper_reading_skills", ["forge-paper-note"])
     if not isinstance(values, list):
         raise RuntimeError("paper_reading_skills must be a JSON array")
     if not values:
@@ -151,9 +170,124 @@ def ensure_paper_skills(config: Dict[str, Any]) -> List[str]:
         joined = ", ".join(missing)
         raise RuntimeError(
             f"Missing required paper-reading skills: {joined}. "
-            "Run scripts/install-paperforge-skills.py from the repository root."
+            "Install the local Forge Paper Note skill at "
+            "$CODEX_HOME/skills/forge-paper-note/SKILL.md."
         )
     return skills
+
+
+def ensure_forge_python(config: Dict[str, Any]) -> str:
+    configured = str(config.get("forge_python_path") or sys.executable).strip()
+    interpreter = Path(configured).expanduser().resolve()
+    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+        raise RuntimeError(f"Forge Paper Note Python is not executable: {interpreter}")
+    result = subprocess.run(
+        [str(interpreter), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "Could not inspect Forge Paper Note Python")
+    match = re.fullmatch(r"(\d+)\.(\d+)", result.stdout.strip())
+    if not match or (int(match.group(1)), int(match.group(2))) < (3, 10):
+        raise RuntimeError(
+            f"Forge Paper Note requires Python 3.10 or newer; configured interpreter is {result.stdout.strip()}"
+        )
+    return str(interpreter)
+
+
+def paper_images_dir(config: Dict[str, Any], task: Dict[str, Any], create: bool = False) -> Path:
+    """Resolve the one paper-specific image directory admitted by the task."""
+
+    vault = config["vault"].resolve()
+    raw_images_dir = str(task.get("images_dir") or "").strip()
+    raw_asset_subdir = str(task.get("image_asset_subdir") or "").strip()
+    note_path = Path(str(task.get("note_path") or ""))
+    if not raw_images_dir or not raw_asset_subdir or not note_path.name:
+        raise RuntimeError("Paper task is missing images_dir, image_asset_subdir, or note_path")
+
+    relative = Path(raw_images_dir)
+    asset_subdir = Path(raw_asset_subdir)
+    if (
+        relative.is_absolute()
+        or asset_subdir.is_absolute()
+        or ".." in relative.parts
+        or ".." in asset_subdir.parts
+    ):
+        raise RuntimeError("Paper image paths must be safe relative paths inside the vault")
+
+    expected_relative = note_path.parent / asset_subdir
+    if relative != expected_relative:
+        raise RuntimeError(
+            f"Paper images_dir must equal note parent plus image_asset_subdir: {expected_relative.as_posix()}"
+        )
+    if relative.parent != PAPER_IMAGES_ROOT or relative.name != note_path.stem:
+        raise RuntimeError(
+            "Paper images must use wiki/papers/images/<exact-note-stem>/"
+        )
+
+    root = (vault / PAPER_IMAGES_ROOT).resolve()
+    destination = (vault / relative).resolve()
+    try:
+        destination.relative_to(root)
+    except ValueError as error:
+        raise RuntimeError("Paper images_dir escaped wiki/papers/images") from error
+    if create:
+        destination.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
+def note_image_targets(note_text: str) -> List[str]:
+    markdown = re.findall(r"!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))", note_text)
+    obsidian = re.findall(r"!\[\[([^\]|#]+)", note_text)
+    targets = [left or right for left, right in markdown]
+    targets.extend(obsidian)
+    return [unquote(target.strip()) for target in targets if target.strip()]
+
+
+def validate_paper_image_contract(config: Dict[str, Any], task: Dict[str, Any], note_text: str) -> None:
+    values = yaml_frontmatter_scalars(note_text)
+    expected_dir = str(task["images_dir"])
+    actual_dir = unquote_yaml_scalar(values.get("images_dir", ""))
+    if actual_dir != expected_dir:
+        raise RuntimeError(
+            f"Generated paper note images_dir does not match task metadata: {expected_dir}"
+        )
+
+    destination = paper_images_dir(config, task, create=False)
+    note_parent = Path(str(task["note_path"])).parent
+    expected_relative_prefix = f"{task['image_asset_subdir'].rstrip('/')}/"
+    expected_vault_prefix = f"{expected_dir.rstrip('/')}/"
+    managed_prefixes = ("images/", f"{PAPER_IMAGES_ROOT.as_posix()}/")
+    for raw_target in note_image_targets(note_text):
+        target = raw_target.split("?", 1)[0]
+        if target.startswith(expected_relative_prefix):
+            resolved = (config["vault"] / note_parent / target).resolve()
+        elif target.startswith(expected_vault_prefix):
+            resolved = (config["vault"] / target).resolve()
+        elif target.startswith(managed_prefixes):
+            raise RuntimeError(
+                f"Paper note references another paper's managed image directory: {raw_target}"
+            )
+        else:
+            continue
+        try:
+            resolved.relative_to(destination.resolve())
+        except ValueError as error:
+            raise RuntimeError(f"Paper image reference escaped its images_dir: {raw_target}") from error
+        if not resolved.is_file():
+            raise RuntimeError(f"Paper note references a missing managed image: {raw_target}")
+    if not destination.exists():
+        raise RuntimeError(f"Paper images_dir was not created: {expected_dir}")
+    invalid = [
+        path
+        for path in destination.rglob("*")
+        if path.is_file() and path.suffix.casefold() not in PAPER_IMAGE_EXTENSIONS
+    ]
+    if invalid:
+        relative = invalid[0].relative_to(config["vault"]).as_posix()
+        raise RuntimeError(f"Paper images_dir contains a non-image artifact: {relative}")
 
 
 def queue_path(config: Dict[str, Any]) -> Path:
@@ -274,7 +408,7 @@ def yaml_frontmatter_value(value: Any) -> str:
 
 
 def sync_paper_metadata_frontmatter(note: Path, metadata: Dict[str, Any]) -> bool:
-    """Backfill managed journal metrics without disturbing note content."""
+    """Backfill managed paper metadata without disturbing note content."""
 
     if not note.is_file():
         return False
@@ -294,6 +428,7 @@ def sync_paper_metadata_frontmatter(note: Path, metadata: Dict[str, Any]) -> boo
         return False
 
     managed = (
+        "images_dir",
         "journal",
         "issn",
         "impact_factor",
@@ -375,6 +510,7 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
 
     added = 0
     refreshed = 0
+    normalized = 0
     notes_refreshed = 0
     refresh_keys = (
         "impact_factor",
@@ -383,6 +519,8 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
         "impact_factor_year",
         "issn",
         "journal",
+        "images_dir",
+        "image_asset_subdir",
         "supporting_information",
         "supporting_information_manifest",
         "supporting_information_status",
@@ -390,6 +528,12 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
     for candidate in candidates:
         if candidate["id"] in known:
             existing = next(item for item in queue["items"] if item.get("id") == candidate["id"])
+            if candidate.get("kind") == "paper":
+                existing_note = vault / str(existing.get("note_path") or "")
+                if existing_note.is_file():
+                    candidate["note_path"] = str(existing["note_path"])
+                    candidate.update(paper_image_identity(str(existing["note_path"])))
+                    paper_images_dir(config, candidate, create=True)
             changed = False
             for key in refresh_keys:
                 if key in candidate and existing.get(key) != candidate.get(key):
@@ -408,11 +552,32 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
         known.add(candidate["id"])
         added += 1
 
-    if added or refreshed:
+    # Normalize image paths for already drafted notes even when their Zotero
+    # attachment is inactive and therefore absent from the current candidates.
+    for existing in queue["items"]:
+        if existing.get("kind") != "paper" or not existing.get("note_path"):
+            continue
+        note = vault / str(existing["note_path"])
+        if not note.is_file():
+            continue
+        expected = paper_image_identity(str(existing["note_path"]))
+        changed = False
+        for key, value in expected.items():
+            if existing.get(key) != value:
+                existing[key] = value
+                changed = True
+        if changed:
+            existing["metadata_updated_at"] = now_iso()
+            normalized += 1
+        paper_images_dir(config, existing, create=True)
+        if sync_paper_metadata_frontmatter(note, existing):
+            notes_refreshed += 1
+
+    if added or refreshed or normalized:
         save_queue(config, queue)
     log(
         f"scan complete candidates={len(candidates)} added={added} "
-        f"refreshed={refreshed} notes_refreshed={notes_refreshed}"
+        f"refreshed={refreshed} normalized={normalized} notes_refreshed={notes_refreshed}"
     )
     return added
 
@@ -884,9 +1049,11 @@ def ingest_next(config: Dict[str, Any]) -> int:
         try:
             if task["kind"] == "paper":
                 paper_skills = ensure_paper_skills(config)
+                task["forge_python_path"] = ensure_forge_python(config)
                 generated_date = task.get("generated_date") or local_date()
                 task["generated_date"] = generated_date
                 task.update(paper_note_identity(task, generated_date))
+                paper_images_dir(config, task, create=True)
                 save_queue(config, queue)
                 extract_path = extract_pdf(config, task)
                 task["extract_path"] = str(extract_path.relative_to(config["vault"]))
@@ -894,7 +1061,13 @@ def ingest_next(config: Dict[str, Any]) -> int:
             skill_instruction = ""
             if task["kind"] == "paper":
                 invocations = " and ".join(f"${name}" for name in paper_skills)
-                skill_instruction = f"\nUse {invocations} for the paper analysis and vault-note mapping."
+                skill_instruction = (
+                    f"\nUse {invocations} for the complete paper analysis, figure review, "
+                    "quality gates, and vault-note mapping. Store every selected or cropped "
+                    "note image only in TASK_JSON.images_dir, pass TASK_JSON.image_asset_subdir "
+                    "to figure materialization, use TASK_JSON.forge_python_path for every bundled "
+                    "Forge Python script, and embed images with vault-relative Obsidian links."
+                )
             prompt = (
                 "执行知识库的单一来源摄取任务。严格读取并遵守 AGENTS.md 与 "
                 f"{workflow.relative_to(config['vault'])}。只处理下面 JSON 指定的一个任务；"
@@ -918,6 +1091,7 @@ def ingest_next(config: Dict[str, Any]) -> int:
                 raise RuntimeError(f"Generated note is not marked status: draft: {task['note_path']}")
             if task["kind"] == "paper":
                 validate_impact_factor_properties(note_text, task)
+                validate_paper_image_contract(config, task, note_text)
                 expected_heading = f"# {task['display_title']}"
                 if not re.search(rf"(?m)^{re.escape(expected_heading)}\s*$", note_text):
                     raise RuntimeError(

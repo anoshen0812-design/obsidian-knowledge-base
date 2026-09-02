@@ -16,6 +16,14 @@ The caller supplies exactly one `TASK_JSON`. Process only that source.
 
 For a paper task, read the task metadata and its `extract_path`. Page headings in the extract correspond to PDF pages. Inspect the original PDF only when extraction is ambiguous or figures/tables are essential.
 
+For `前人工作与不足`, novelty context, adjacent literature, and follow-up
+calibration, use only the current paper's body and printed reference list. Do not use
+web search, browser tools, literature APIs, publisher pages, or externally opened
+cited papers. Phrase each prior-work result as the current paper's characterization,
+cite the current PDF page and printed reference number, and visibly state
+`仅依据本文转述，未独立核验`. Treat novelty as unresolved because no external
+literature search was performed.
+
 `supporting_information` is an optional list of cached SI PDFs. Do not open or extract these files by default. Use SI only when all of the following are true:
 
 1. a concrete method, value, table, figure, or derivation needed by the draft cannot be verified in the primary PDF;

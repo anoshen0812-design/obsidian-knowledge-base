@@ -179,6 +179,83 @@ class PipelineParagraphReadingTest(unittest.TestCase):
             self.assertEqual(saved_task["status"], "drafted")
             self.assertEqual(saved_task["paragraph_reading_status"], "completed")
 
+    def test_redraft_requeues_only_the_exact_existing_paper_note(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Path(directory)
+            task = self.make_task()
+            task.update(
+                {
+                    "id": "paper:ATTACH:0123456789abcdef",
+                    "kind": "paper",
+                    "status": "drafted",
+                }
+            )
+            note = vault / task["note_path"]
+            note.parent.mkdir(parents=True)
+            note.write_text("---\ntype: paper\nstatus: draft\n---\n", encoding="utf-8")
+            queue_file = vault / "system/queue/pending.json"
+            queue_file.parent.mkdir(parents=True)
+            queue_file.write_text(
+                json.dumps({"schema_version": 1, "items": [task]}),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                PIPELINE.queue_paper_redraft({"vault": vault}, task["note_path"]),
+                0,
+            )
+            saved_task = json.loads(queue_file.read_text(encoding="utf-8"))["items"][0]
+            self.assertEqual(saved_task["status"], "pending")
+            self.assertEqual(saved_task["redraft_previous_status"], "drafted")
+
+    def test_paper_ingest_and_redraft_use_thirty_minute_limits(self):
+        config = {"codex_timeout_seconds": 1800, "redraft_timeout_seconds": 1800}
+        self.assertEqual(
+            PIPELINE.ingest_timeout_seconds(
+                config,
+                {"kind": "paper", "redraft_requested_at": "2026-09-02T18:00:00+08:00"},
+            ),
+            1800,
+        )
+        self.assertEqual(
+            PIPELINE.ingest_timeout_seconds(config, {"kind": "paper"}),
+            1800,
+        )
+
+    def test_cancel_redrafts_restores_previous_states(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Path(directory)
+            queue_file = vault / "system/queue/pending.json"
+            queue_file.parent.mkdir(parents=True)
+            queue_file.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "items": [
+                            {
+                                "id": "paper:a",
+                                "status": "pending",
+                                "redraft_previous_status": "drafted",
+                                "redraft_requested_at": "now",
+                            },
+                            {
+                                "id": "paper:b",
+                                "status": "failed",
+                                "last_error": "timeout",
+                                "redraft_previous_status": "integrated",
+                                "redraft_requested_at": "now",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(PIPELINE.cancel_paper_redrafts({"vault": vault}), 2)
+            items = json.loads(queue_file.read_text(encoding="utf-8"))["items"]
+            self.assertEqual([item["status"] for item in items], ["drafted", "integrated"])
+            self.assertTrue(all("redraft_requested_at" not in item for item in items))
+            self.assertTrue(all("last_error" not in item for item in items))
+
 
 if __name__ == "__main__":
     unittest.main()

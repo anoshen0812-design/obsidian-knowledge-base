@@ -1081,6 +1081,12 @@ def codex_command(
     )
 
 
+def ingest_timeout_seconds(config: Dict[str, Any], task: Dict[str, Any]) -> int:
+    if task.get("kind") == "paper" and task.get("redraft_requested_at"):
+        return int(config.get("redraft_timeout_seconds", 1800))
+    return int(config.get("codex_timeout_seconds", 1800))
+
+
 def write_run_log(config: Dict[str, Any], operation: str, source_id: str, result: subprocess.CompletedProcess) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", source_id)
@@ -1248,7 +1254,10 @@ def ingest_next(config: Dict[str, Any]) -> int:
                     "quality gates, and vault-note mapping. Store every selected or cropped "
                     "note image only in TASK_JSON.images_dir, pass TASK_JSON.image_asset_subdir "
                     "to figure materialization, use TASK_JSON.forge_python_path for every bundled "
-                    "Forge Python script, and embed images with vault-relative Obsidian links."
+                    "Forge Python script, and embed images with vault-relative Obsidian links. "
+                    "For prior work, novelty context, and follow-up calibration, use only the current "
+                    "paper and its printed references. Do not perform network literature research or "
+                    "open cited works; label every prior-work summary as not independently verified."
                 )
             prompt = (
                 "执行知识库的单一来源摄取任务。严格读取并遵守 AGENTS.md 与 "
@@ -1257,7 +1266,12 @@ def ingest_next(config: Dict[str, Any]) -> int:
                 f"{skill_instruction}\n\n"
                 f"TASK_JSON:\n{json.dumps(task, ensure_ascii=False, indent=2)}"
             )
-            result = codex_command(config, prompt, f"last-ingest-{safe_stem(task['id'])}")
+            result = codex_command(
+                config,
+                prompt,
+                f"last-ingest-{safe_stem(task['id'])}",
+                timeout_seconds=ingest_timeout_seconds(config, task),
+            )
             run_log = write_run_log(config, "ingest", task["id"], result)
             note = config["vault"] / task["note_path"]
             if result.returncode != 0:
@@ -1299,6 +1313,9 @@ def ingest_next(config: Dict[str, Any]) -> int:
             task["last_run_log"] = str(run_log.relative_to(config["vault"]))
             task["status"] = "drafted"
             task["updated_at"] = now_iso()
+            if task.get("redraft_requested_at"):
+                task["redraft_completed_at"] = now_iso()
+                task.pop("redraft_requested_at", None)
             save_queue(config, queue)
             append_log(
                 config["vault"] / "system" / "ingest-log.md",
@@ -1554,6 +1571,61 @@ def retry_failed(config: Dict[str, Any]) -> int:
     return 0
 
 
+def queue_paper_redraft(config: Dict[str, Any], note_value: str) -> int:
+    """Requeue one exact existing primary paper note for a reviewed regeneration."""
+
+    with pipeline_lock(config):
+        note, relative = vault_relative_note(config, note_value)
+        if Path(relative).parent != Path("wiki") / "papers" or not note.is_file():
+            raise RuntimeError(
+                "Redraft requires an existing primary paper note directly under wiki/papers"
+            )
+        queue = load_queue(config)
+        matches = [
+            item
+            for item in queue["items"]
+            if item.get("kind") == "paper" and item.get("note_path") == relative
+        ]
+        if not matches:
+            raise RuntimeError("No paper queue task matches the selected note; run scan first")
+        task = matches[-1]
+        previous_status = str(task.get("status", "unknown"))
+        task["status"] = "pending"
+        task["redraft_requested_at"] = now_iso()
+        task["redraft_previous_status"] = previous_status
+        task["updated_at"] = now_iso()
+        task.pop("last_error", None)
+        save_queue(config, queue)
+        log(f"redraft queued id={task['id']} previous_status={previous_status} note={relative}")
+        return 0
+
+
+def cancel_paper_redrafts(config: Dict[str, Any]) -> int:
+    """Cancel queued/failed redrafts and restore their pre-redraft lifecycle states."""
+
+    with pipeline_lock(config):
+        queue = load_queue(config)
+        cancelled = 0
+        for task in queue["items"]:
+            if not task.get("redraft_requested_at") or task.get("status") not in {
+                "pending",
+                "failed",
+                "needs_ocr",
+            }:
+                continue
+            previous = str(task.get("redraft_previous_status") or "drafted")
+            task["status"] = previous
+            task["redraft_cancelled_at"] = now_iso()
+            task["updated_at"] = now_iso()
+            task.pop("redraft_requested_at", None)
+            task.pop("last_error", None)
+            cancelled += 1
+        if cancelled:
+            save_queue(config, queue)
+        log(f"redraft cancellation complete cancelled={cancelled}")
+        return cancelled
+
+
 def show_status(config: Dict[str, Any]) -> int:
     queue = load_queue(config)
     counts: Dict[str, int] = {}
@@ -1595,6 +1667,15 @@ def main() -> int:
     integrate_parser.add_argument("--note", required=True)
     subparsers.add_parser("lint", help="Generate a wiki health report")
     subparsers.add_parser("retry-failed", help="Retry the oldest failed task")
+    redraft_parser = subparsers.add_parser(
+        "redraft",
+        help="Requeue one existing primary paper note for Forge regeneration",
+    )
+    redraft_parser.add_argument("--note", required=True)
+    subparsers.add_parser(
+        "cancel-redrafts",
+        help="Cancel all queued or failed redrafts and restore their previous states",
+    )
     subparsers.add_parser("status", help="Print queue counts")
     args = parser.parse_args()
 
@@ -1613,6 +1694,11 @@ def main() -> int:
             return lint_wiki(config)
         if args.command == "retry-failed":
             return retry_failed(config)
+        if args.command == "redraft":
+            return queue_paper_redraft(config, args.note)
+        if args.command == "cancel-redrafts":
+            cancel_paper_redrafts(config)
+            return 0
         if args.command == "status":
             return show_status(config)
         return 2

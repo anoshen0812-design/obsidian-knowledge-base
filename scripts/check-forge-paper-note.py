@@ -23,6 +23,12 @@ REQUIRED_FILES = (
     "scripts/write_obsidian_note.py",
 )
 
+CURRENT_PAPER_ONLY_MARKERS = (
+    "## Current-paper-only literature context",
+    "paper_characterization_only",
+    "Do not use web search",
+)
+
 
 def compatible_python(explicit: str) -> str:
     candidates = [explicit] if explicit else [
@@ -61,7 +67,23 @@ def main() -> int:
             print(f"- missing: {relative}", file=sys.stderr)
         return 1
 
+    skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
+    missing_markers = [marker for marker in CURRENT_PAPER_ONLY_MARKERS if marker not in skill_text]
+    if missing_markers:
+        print("Forge Paper Note is missing the local-only prior-work policy", file=sys.stderr)
+        for marker in missing_markers:
+            print(f"- missing marker: {marker}", file=sys.stderr)
+        return 1
+
+    audit_linter = (skill_dir / "scripts/lint_research_audit.py").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    if 'VERIFICATION_STATUSES = {"paper_characterization_only"}' not in audit_linter:
+        print("Forge research-audit lint does not enforce paper_characterization_only", file=sys.stderr)
+        return 1
+
     print(f"Forge Paper Note ready: {skill_dir}")
+    print("Prior-work policy: current paper only; network literature research disabled")
     print(f"Compatible Python: {interpreter}")
     return 0
 

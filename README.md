@@ -73,6 +73,10 @@ python3 scripts/check-forge-paper-note.py
 在 `system/knowledge/config.json` 中把 `forge_python_path` 设为 Python 3.10+ 的绝对路径。
 该 skill 复用了 DeepPaperNote 的确定性单论文流水线，并吸收了 PaperForge 的研究推理思想；两者均在下方保留来源说明。
 
+单篇 Forge 笔记生成上限为30分钟。前人工作、创新背景和后续方向只依据当前
+论文正文及其参考文献表进行转述，不联网检索或打开被引论文；笔记会明确标注
+“仅依据本文转述，未独立核验”，后续方向的新颖性状态保持为 `unresolved`。
+
 ## 可选 MODE A 逐段精读
 
 每篇常规论文笔记会显示两个复选属性：`paragraph_reading` 用于人工选择值得

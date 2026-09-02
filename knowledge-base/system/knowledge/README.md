@@ -9,11 +9,17 @@ Common commands:
 /usr/bin/python3 system/knowledge/run_pipeline.py status
 /usr/bin/python3 system/knowledge/run_pipeline.py ingest-next
 /usr/bin/python3 system/knowledge/run_pipeline.py paragraph-read --note "wiki/papers/YYYY-MM-DD - First Author - Paper Title.md"
+/usr/bin/python3 system/knowledge/run_pipeline.py redraft --note "wiki/papers/YYYY-MM-DD - First Author - Paper Title.md"
 /usr/bin/python3 system/knowledge/run_pipeline.py integrate --note "wiki/papers/YYYY-MM-DD - First Author - Paper Title.md"
 /usr/bin/python3 system/knowledge/run_pipeline.py lint
 ```
 
 Obsidian exposes equivalent commands. Automatic ingest processes one source at a time.
+`redraft` only requeues the exact existing primary paper note supplied with `--note`;
+the next `ingest-next` regenerates it with the current Forge workflow and returns it
+to draft review without editing queue JSON by hand. Both normal paper ingest and
+redrafts have a 30-minute single-paper limit (`codex_timeout_seconds` and
+`redraft_timeout_seconds`, both defaulting to 1800 seconds).
 
 Paper extraction uses MinerU by default. Its structured content list is regrouped by
 `page_idx`, preserving formulas, tables, figures, captions, and `## Page N` evidence
@@ -60,6 +66,11 @@ The check requires `$CODEX_HOME/skills/forge-paper-note/SKILL.md` plus its deter
 figure, lint, and save scripts. The skill itself is device-local and is not vendored in this
 repository. Set `forge_python_path` in `config.json` to a Python 3.10+ interpreter; the
 runner passes that exact interpreter to unattended Forge tasks.
+
+Forge literature context is intentionally local-only: the prior-work section may
+summarize only how the current paper describes its cited works. It does not search the
+web or open cited papers, every entry is marked as not independently verified, and
+follow-up novelty remains unresolved without external literature calibration.
 
 ## Optional Mode A paragraph reading
 

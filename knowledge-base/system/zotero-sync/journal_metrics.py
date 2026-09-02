@@ -103,6 +103,7 @@ def impact_factor_from_extra(extra: Any) -> Optional[Dict[str, Any]]:
         "impact_factor": factor,
         "impact_factor_year": year,
         "impact_factor_source": source or "Zotero Extra",
+        "impact_factor_retrieved_at": "",
     }
 
 
@@ -144,6 +145,9 @@ def impact_factor_from_catalog(
         "impact_factor_year": parse_year(record.get("impact_factor_year", record.get("year"))),
         "impact_factor_source": str(record.get("impact_factor_source", record.get("source", ""))).strip()
         or "Local impact-factor catalog",
+        "impact_factor_retrieved_at": str(
+            record.get("impact_factor_retrieved_at", record.get("retrieved_at", ""))
+        ).strip(),
     }
 
 
@@ -155,6 +159,7 @@ def resolve_journal_metrics(parent_data: Mapping[str, Any], catalog: Any = None)
         "impact_factor": None,
         "impact_factor_year": "",
         "impact_factor_source": "",
+        "impact_factor_retrieved_at": "",
     }
     return {
         "journal": str(parent_data.get("publicationTitle") or "").strip(),

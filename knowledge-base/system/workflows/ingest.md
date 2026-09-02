@@ -52,7 +52,8 @@ journal: "Journal title"
 issn: "0000-0000"
 impact_factor: 5.5
 impact_factor_year: "2024"
-impact_factor_source: "Journal Citation Reports"
+impact_factor_source: "https://publisher.example/journal"
+impact_factor_retrieved_at: "2026-01-01T00:00:00+08:00"
 reviewed: false
 concepts: []
 materials: []
@@ -62,10 +63,11 @@ generated_at: "ISO timestamp"
 ---
 ```
 
-Every paper note must contain `impact_factor`, `impact_factor_year`, and
-`impact_factor_source`. Copy them exactly from `TASK_JSON`. When a value is
-absent, write YAML `null`; never estimate a JIF or substitute CiteScore,
-OpenAlex mean citedness, a five-year impact factor, or another metric.
+Every paper note must contain `impact_factor`, `impact_factor_year`,
+`impact_factor_source`, and `impact_factor_retrieved_at`. Copy them exactly
+from `TASK_JSON`. When a value is absent, write YAML `null`; never estimate a
+JIF or substitute CiteScore, OpenAlex mean citedness, a five-year impact
+factor, or another metric.
 
 Experiment-derived notes use `type: experiment-analysis` and `source_note` instead of Zotero/PDF fields.
 

@@ -215,6 +215,7 @@ def paper_task(
         "creators": entry.get("creators", []),
         "doi": entry.get("doi", ""),
         "impact_factor": entry.get("impact_factor"),
+        "impact_factor_retrieved_at": entry.get("impact_factor_retrieved_at", ""),
         "impact_factor_source": entry.get("impact_factor_source", ""),
         "impact_factor_year": entry.get("impact_factor_year", ""),
         "issn": entry.get("issn", ""),
@@ -298,6 +299,7 @@ def sync_paper_metadata_frontmatter(note: Path, metadata: Dict[str, Any]) -> boo
         "impact_factor",
         "impact_factor_year",
         "impact_factor_source",
+        "impact_factor_retrieved_at",
     )
     insert_at = scalar_indexes.get("year", len(lines) - 1) + 1
     changed = False
@@ -376,6 +378,7 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
     notes_refreshed = 0
     refresh_keys = (
         "impact_factor",
+        "impact_factor_retrieved_at",
         "impact_factor_source",
         "impact_factor_year",
         "issn",
@@ -586,7 +589,12 @@ def unquote_yaml_scalar(value: str) -> str:
 
 def validate_impact_factor_properties(note_text: str, task: Dict[str, Any]) -> None:
     values = yaml_frontmatter_scalars(note_text)
-    required = ("impact_factor", "impact_factor_year", "impact_factor_source")
+    required = (
+        "impact_factor",
+        "impact_factor_year",
+        "impact_factor_source",
+        "impact_factor_retrieved_at",
+    )
     missing = [key for key in required if key not in values]
     if missing:
         raise RuntimeError(f"Generated paper note is missing properties: {', '.join(missing)}")
@@ -604,7 +612,7 @@ def validate_impact_factor_properties(note_text: str, task: Dict[str, Any]) -> N
         except ValueError as error:
             raise RuntimeError("Generated paper note impact_factor is not numeric") from error
 
-    for key in ("impact_factor_year", "impact_factor_source"):
+    for key in ("impact_factor_year", "impact_factor_source", "impact_factor_retrieved_at"):
         expected = str(task.get(key) or "")
         actual = unquote_yaml_scalar(values[key])
         if expected:

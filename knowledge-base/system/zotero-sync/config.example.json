@@ -2,6 +2,14 @@
   "api_base": "http://localhost:23119/api",
   "collection_key": "",
   "collection_name": "Doc",
+  "automatic_impact_factor": {
+    "enabled": true,
+    "max_journals_per_run": 2,
+    "openalex_timeout_seconds": 5,
+    "refresh_days": 90,
+    "retry_days": 14,
+    "timeout_seconds": 150
+  },
   "impact_factors": {},
   "literature_dir": "sources/literature",
   "supplementary_information": {

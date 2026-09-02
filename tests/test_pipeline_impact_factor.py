@@ -33,12 +33,14 @@ class PipelineImpactFactorTest(unittest.TestCase):
                     "impact_factor": 5.5,
                     "impact_factor_year": "2024",
                     "impact_factor_source": "Journal Citation Reports",
+                    "impact_factor_retrieved_at": "2026-09-02T12:00:00+08:00",
                 },
             )
             text = note.read_text(encoding="utf-8")
             self.assertTrue(changed)
             self.assertIn('journal: "Biomacromolecules"', text)
             self.assertIn("impact_factor: 5.5", text)
+            self.assertIn('impact_factor_retrieved_at: "2026-09-02T12:00:00+08:00"', text)
             self.assertTrue(text.endswith("\n# Paper\n"))
 
     def test_preserves_manual_value_when_upstream_is_empty(self):
@@ -50,12 +52,18 @@ year: "2024"
 impact_factor: 7.1
 impact_factor_year: "2025"
 impact_factor_source: "Manual verification"
+impact_factor_retrieved_at: "2026-09-02T12:00:00+08:00"
 ---
 """
             note.write_text(original, encoding="utf-8")
             changed = PIPELINE.sync_paper_metadata_frontmatter(
                 note,
-                {"impact_factor": None, "impact_factor_year": "", "impact_factor_source": ""},
+                {
+                    "impact_factor": None,
+                    "impact_factor_year": "",
+                    "impact_factor_source": "",
+                    "impact_factor_retrieved_at": "",
+                },
             )
             self.assertTrue(changed)  # Missing journal and ISSN are added as null.
             text = note.read_text(encoding="utf-8")
@@ -67,6 +75,7 @@ impact_factor_source: "Manual verification"
 impact_factor: 5.5
 impact_factor_year: "2024"
 impact_factor_source: "Journal Citation Reports"
+impact_factor_retrieved_at: "2026-09-02T12:00:00+08:00"
 ---
 """
         PIPELINE.validate_impact_factor_properties(
@@ -75,6 +84,7 @@ impact_factor_source: "Journal Citation Reports"
                 "impact_factor": 5.5,
                 "impact_factor_year": "2024",
                 "impact_factor_source": "Journal Citation Reports",
+                "impact_factor_retrieved_at": "2026-09-02T12:00:00+08:00",
             },
         )
 
@@ -83,6 +93,7 @@ impact_factor_source: "Journal Citation Reports"
 impact_factor: null
 impact_factor_year: null
 impact_factor_source: null
+impact_factor_retrieved_at: null
 ---
 """
         PIPELINE.validate_impact_factor_properties(note, {"impact_factor": None})
@@ -92,6 +103,7 @@ impact_factor_source: null
 impact_factor: 8.8
 impact_factor_year: "2025"
 impact_factor_source: "unknown"
+impact_factor_retrieved_at: "2026-09-02T12:00:00+08:00"
 ---
 """
         with self.assertRaisesRegex(RuntimeError, "invented an impact factor"):

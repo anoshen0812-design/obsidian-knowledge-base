@@ -7,15 +7,22 @@ Obsidian 的本地插件每 60 秒检查一次 Zotero 的 `Doc` 分类，将 PDF
 - `sources/literature/index.md`
 - `sources/literature/manifests/zotero-doc.json`
 
-每条论文元数据还会携带期刊影响因子、统计年份与来源。同步器不会用 CiteScore
-或其他引用指标冒充 Journal Impact Factor。它按以下优先级读取：
+每条论文元数据还会携带期刊影响因子、统计年份、官方来源链接与核验时间。
+同步器不会用 CiteScore 或其他引用指标冒充 Journal Impact Factor。它按以下优先级读取：
 
 1. Zotero 父条目的 `Extra` 字段；
 2. `system/zotero-sync/config.json` 中的本地 `impact_factors` 表；
-3. 两者都没有时写入空值，由笔记属性显示为 `null`。
+3. 通过 Codex live web search 查找出版社官方期刊页或 Clarivate/JCR 页面；
+4. 无法从上述官方来源核实时写入空值，由笔记属性显示为 `null`。
 
-同步后的数值会自动回填到已经生成的论文笔记；如果上游没有值，同步器不会
-清空笔记里已有的人工填写值。
+自动结果按 ISSN 缓存，默认每轮最多查询 2 本期刊、90 天刷新一次；失败结果
+14 天后重试，避免每分钟同步时反复联网。新增多本期刊时会在后续轮次逐步补齐。
+刷新失败会保留上一次已核验数值。同步后的数值会自动回填到
+已经生成的论文笔记；如果上游没有值，同步器不会清空笔记里已有的人工填写值。
+
+自动查询默认开启，可在 `automatic_impact_factor` 中调整刷新周期、重试周期、
+单批期刊数与超时时间。它复用 `system/knowledge/config.json` 中已经配置的 Codex
+CLI 路径，不需要新增 API key。
 
 推荐在 Zotero `Extra` 中保存：
 

@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
+from automatic_impact_factor import metric_key, refresh_automatic_impact_factors
 from journal_metrics import resolve_journal_metrics
 from supporting_information import (
     is_auxiliary_pdf_attachment,
@@ -273,12 +274,29 @@ def sync(config_path: Path) -> int:
         item for item in all_pdf_attachments if not is_auxiliary_pdf_attachment(item)
     ]
 
+    primary_parent_keys = {
+        str(item.get("data", {}).get("parentItem") or "") for item in attachments
+    }
+    automatic_metrics, automatic_metrics_changed = refresh_automatic_impact_factors(
+        config=config,
+        vault=vault,
+        parents=(parents[key] for key in sorted(primary_parent_keys) if key in parents),
+        state=state,
+        logger=log,
+    )
+
     synced_at = now_iso()
     active_entries: List[Dict[str, Any]] = []
     copied = 0
     unchanged = 0
     failed = 0
-    changed = not state_path.exists() or not manifest_path.exists() or not index_path.exists() or not bib_path.exists()
+    changed = (
+        automatic_metrics_changed
+        or not state_path.exists()
+        or not manifest_path.exists()
+        or not index_path.exists()
+        or not bib_path.exists()
+    )
     active_keys = set()
 
     for attachment in attachments:
@@ -317,6 +335,8 @@ def sync(config_path: Path) -> int:
                 parent_data,
                 config.get("impact_factors", {}),
             )
+            if journal_metrics.get("impact_factor") is None:
+                journal_metrics.update(automatic_metrics.get(metric_key(parent_data), {}))
             entry = {
                 "active": True,
                 "attachment_key": attachment_key,

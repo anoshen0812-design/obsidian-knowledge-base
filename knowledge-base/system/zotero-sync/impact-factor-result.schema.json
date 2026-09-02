@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["results"],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lookup_key",
+          "journal",
+          "impact_factor",
+          "impact_factor_year",
+          "source_url",
+          "source_kind",
+          "note"
+        ],
+        "properties": {
+          "lookup_key": {"type": "string"},
+          "journal": {"type": "string"},
+          "impact_factor": {"type": ["number", "null"]},
+          "impact_factor_year": {"type": ["string", "null"]},
+          "source_url": {"type": ["string", "null"]},
+          "source_kind": {
+            "type": "string",
+            "enum": ["publisher", "clarivate", "unavailable"]
+          },
+          "note": {"type": "string"}
+        }
+      }
+    }
+  }
+}

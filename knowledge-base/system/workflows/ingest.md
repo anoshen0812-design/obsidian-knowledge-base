@@ -48,6 +48,11 @@ supporting_information:
   - "[[sources/literature/si/PARENT/example.pdf]]"
 supporting_information_used: []
 year: "2026"
+journal: "Journal title"
+issn: "0000-0000"
+impact_factor: 5.5
+impact_factor_year: "2024"
+impact_factor_source: "Journal Citation Reports"
 reviewed: false
 concepts: []
 materials: []
@@ -56,6 +61,11 @@ phenomena: []
 generated_at: "ISO timestamp"
 ---
 ```
+
+Every paper note must contain `impact_factor`, `impact_factor_year`, and
+`impact_factor_source`. Copy them exactly from `TASK_JSON`. When a value is
+absent, write YAML `null`; never estimate a JIF or substitute CiteScore,
+OpenAlex mean citedness, a five-year impact factor, or another metric.
 
 Experiment-derived notes use `type: experiment-analysis` and `source_note` instead of Zotero/PDF fields.
 

@@ -14,6 +14,7 @@ Check for:
 - canonical pages supported by only one weak source;
 - paper–experiment disagreements worth investigating;
 - missing source files or inactive Zotero attachments;
+- paper notes missing `impact_factor`, `impact_factor_year`, or `impact_factor_source`, and non-null impact factors without a year or source;
 - knowledge gaps that suggest a new literature search or experiment.
 
 The report must separate: critical integrity problems, review backlog, contradiction candidates, graph/link quality, and suggested next investigations. Include exact file links.

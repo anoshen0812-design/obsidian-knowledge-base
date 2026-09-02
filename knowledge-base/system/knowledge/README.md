@@ -21,6 +21,8 @@ the exact SI page when used.
 
 Paper draft filenames, level-one headings, and index aliases follow
 `YYYY-MM-DD - 第一作者 - 文献标题`. The date is fixed when draft generation first starts.
+Paper frontmatter always includes `impact_factor`, `impact_factor_year`, and
+`impact_factor_source`; unavailable values remain explicit YAML `null` values.
 
 ## PaperForge paper reading
 

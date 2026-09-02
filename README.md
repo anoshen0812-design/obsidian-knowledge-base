@@ -35,6 +35,7 @@ python3 system/knowledge/run_pipeline.py ingest-next
 - 未审核草稿只进入 `wiki/papers/` 或 `wiki/experiments/`。
 - 只有明确标记为 `status: reviewed` 的笔记才能更新规范知识页。
 - 所有论文声明应保留来源 PDF 页码链接；不确定页码时必须标记待核对。
+- 论文属性保留影响因子、统计年份和来源；缺失时写 `null`，不以其他引用指标替代。
 - `config.json`、`data.json`、队列状态、日志和生成内容已由 `.gitignore` 排除。
 
 ## PaperForge 论文阅读

@@ -214,6 +214,11 @@ def paper_task(
         "created_at": now_iso(),
         "creators": entry.get("creators", []),
         "doi": entry.get("doi", ""),
+        "impact_factor": entry.get("impact_factor"),
+        "impact_factor_source": entry.get("impact_factor_source", ""),
+        "impact_factor_year": entry.get("impact_factor_year", ""),
+        "issn": entry.get("issn", ""),
+        "journal": entry.get("journal", ""),
         "extract_path": f"extracts/papers/{attachment_key}.md",
         "id": f"{source_identity}:{sha256[:16]}",
         "kind": "paper",
@@ -257,6 +262,76 @@ def experiment_task(source: Path, vault: Path) -> Dict[str, Any]:
     }
 
 
+def yaml_frontmatter_value(value: Any) -> str:
+    if value is None or value == "":
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return json.dumps(value, ensure_ascii=False)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def sync_paper_metadata_frontmatter(note: Path, metadata: Dict[str, Any]) -> bool:
+    """Backfill managed journal metrics without disturbing note content."""
+
+    if not note.is_file():
+        return False
+    note_text = note.read_text(encoding="utf-8", errors="ignore")
+    match = re.match(r"\A---\s*\n(.*?)\n---(?P<tail>\s*\n|\Z)", note_text, flags=re.DOTALL)
+    if not match:
+        return False
+    lines = match.group(1).splitlines()
+    scalar_indexes: Dict[str, int] = {}
+    scalar_values: Dict[str, str] = {}
+    for index, line in enumerate(lines):
+        scalar = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$", line)
+        if scalar:
+            scalar_indexes[scalar.group(1)] = index
+            scalar_values[scalar.group(1)] = scalar.group(2)
+    if unquote_yaml_scalar(scalar_values.get("type", "")) != "paper":
+        return False
+
+    managed = (
+        "journal",
+        "issn",
+        "impact_factor",
+        "impact_factor_year",
+        "impact_factor_source",
+    )
+    insert_at = scalar_indexes.get("year", len(lines) - 1) + 1
+    changed = False
+    for key in managed:
+        incoming = metadata.get(key)
+        has_authoritative_value = incoming is not None and incoming != ""
+        if key in scalar_indexes:
+            # Never erase a value merely because the current upstream record is
+            # empty. This preserves a user's manually curated metadata.
+            if not has_authoritative_value:
+                continue
+            replacement = f"{key}: {yaml_frontmatter_value(incoming)}"
+            index = scalar_indexes[key]
+            if lines[index] != replacement:
+                lines[index] = replacement
+                changed = True
+            continue
+
+        lines.insert(insert_at, f"{key}: {yaml_frontmatter_value(incoming)}")
+        changed = True
+        insert_at += 1
+        for existing_key, index in list(scalar_indexes.items()):
+            if index >= insert_at - 1:
+                scalar_indexes[existing_key] = index + 1
+        scalar_indexes[key] = insert_at - 1
+
+    if not changed:
+        return False
+    updated_frontmatter = "\n".join(lines)
+    updated = f"---\n{updated_frontmatter}\n---{match.group('tail')}{note_text[match.end():]}"
+    atomic_write_text(note, updated)
+    return True
+
+
 def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
     vault = config["vault"]
     queue = load_queue(config)
@@ -298,7 +373,13 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
 
     added = 0
     refreshed = 0
+    notes_refreshed = 0
     refresh_keys = (
+        "impact_factor",
+        "impact_factor_source",
+        "impact_factor_year",
+        "issn",
+        "journal",
         "supporting_information",
         "supporting_information_manifest",
         "supporting_information_status",
@@ -314,6 +395,10 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
             if changed:
                 existing["metadata_updated_at"] = now_iso()
                 refreshed += 1
+            if candidate.get("kind") == "paper" and existing.get("note_path"):
+                note = vault / str(existing["note_path"])
+                if sync_paper_metadata_frontmatter(note, candidate):
+                    notes_refreshed += 1
             continue
         supersede_older(queue, candidate["source_identity"], candidate["id"])
         queue["items"].append(candidate)
@@ -322,7 +407,10 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
 
     if added or refreshed:
         save_queue(config, queue)
-    log(f"scan complete candidates={len(candidates)} added={added} refreshed={refreshed}")
+    log(
+        f"scan complete candidates={len(candidates)} added={added} "
+        f"refreshed={refreshed} notes_refreshed={notes_refreshed}"
+    )
     return added
 
 
@@ -475,6 +563,57 @@ def set_task_failure(task: Dict[str, Any], error: str, status: str = "failed") -
     task["updated_at"] = now_iso()
 
 
+def yaml_frontmatter_scalars(note_text: str) -> Dict[str, str]:
+    """Read top-level scalar text without depending on a YAML package."""
+
+    match = re.match(r"\A---\s*\n(.*?)\n---(?:\s*\n|\Z)", note_text, flags=re.DOTALL)
+    if not match:
+        return {}
+    values: Dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        scalar = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$", line)
+        if scalar:
+            values[scalar.group(1)] = scalar.group(2)
+    return values
+
+
+def unquote_yaml_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def validate_impact_factor_properties(note_text: str, task: Dict[str, Any]) -> None:
+    values = yaml_frontmatter_scalars(note_text)
+    required = ("impact_factor", "impact_factor_year", "impact_factor_source")
+    missing = [key for key in required if key not in values]
+    if missing:
+        raise RuntimeError(f"Generated paper note is missing properties: {', '.join(missing)}")
+
+    expected_factor = task.get("impact_factor")
+    actual_factor = unquote_yaml_scalar(values["impact_factor"])
+    null_values = {"", "null", "~"}
+    if expected_factor is None:
+        if actual_factor.casefold() not in null_values:
+            raise RuntimeError("Generated paper note invented an impact factor absent from task metadata")
+    else:
+        try:
+            if float(actual_factor) != float(expected_factor):
+                raise RuntimeError("Generated paper note impact_factor does not match task metadata")
+        except ValueError as error:
+            raise RuntimeError("Generated paper note impact_factor is not numeric") from error
+
+    for key in ("impact_factor_year", "impact_factor_source"):
+        expected = str(task.get(key) or "")
+        actual = unquote_yaml_scalar(values[key])
+        if expected:
+            if actual != expected:
+                raise RuntimeError(f"Generated paper note {key} does not match task metadata")
+        elif actual.casefold() not in null_values:
+            raise RuntimeError(f"Generated paper note invented {key} absent from task metadata")
+
+
 def ingest_next(config: Dict[str, Any]) -> int:
     with pipeline_lock(config):
         queue = load_queue(config)
@@ -520,6 +659,7 @@ def ingest_next(config: Dict[str, Any]) -> int:
             if not re.search(r"(?m)^status:\s*['\"]?draft['\"]?\s*$", note_head):
                 raise RuntimeError(f"Generated note is not marked status: draft: {task['note_path']}")
             if task["kind"] == "paper":
+                validate_impact_factor_properties(note_text, task)
                 expected_heading = f"# {task['display_title']}"
                 if not re.search(rf"(?m)^{re.escape(expected_heading)}\s*$", note_text):
                     raise RuntimeError(

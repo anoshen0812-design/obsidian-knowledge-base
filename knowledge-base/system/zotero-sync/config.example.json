@@ -2,6 +2,7 @@
   "api_base": "http://localhost:23119/api",
   "collection_key": "",
   "collection_name": "Doc",
+  "impact_factors": {},
   "literature_dir": "sources/literature",
   "supplementary_information": {
     "directory": "sources/literature/si",

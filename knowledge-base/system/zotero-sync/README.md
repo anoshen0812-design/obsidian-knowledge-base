@@ -7,6 +7,36 @@ Obsidian 的本地插件每 60 秒检查一次 Zotero 的 `Doc` 分类，将 PDF
 - `sources/literature/index.md`
 - `sources/literature/manifests/zotero-doc.json`
 
+每条论文元数据还会携带期刊影响因子、统计年份与来源。同步器不会用 CiteScore
+或其他引用指标冒充 Journal Impact Factor。它按以下优先级读取：
+
+1. Zotero 父条目的 `Extra` 字段；
+2. `system/zotero-sync/config.json` 中的本地 `impact_factors` 表；
+3. 两者都没有时写入空值，由笔记属性显示为 `null`。
+
+同步后的数值会自动回填到已经生成的论文笔记；如果上游没有值，同步器不会
+清空笔记里已有的人工填写值。
+
+推荐在 Zotero `Extra` 中保存：
+
+```text
+Impact Factor: 5.5
+Impact Factor Year: 2024
+Impact Factor Source: Journal Citation Reports
+```
+
+也可以按期刊全名、缩写或 ISSN 配置本地回退值：
+
+```json
+"impact_factors": {
+  "Journal name or ISSN": {
+    "impact_factor": 5.5,
+    "year": "2024",
+    "source": "Journal Citation Reports"
+  }
+}
+```
+
 同步器也会识别 Zotero 中已有的 SI 子附件，并通过结构化仓储或论文正式页面
 发现可公开下载的 PDF Supporting Information。验证为 PDF 后，它们会独立缓存到
 `sources/literature/si/<Zotero parent key>/`，来源、哈希、检查时间和失败原因记录在

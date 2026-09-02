@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
+from journal_metrics import resolve_journal_metrics
 from supporting_information import (
     is_auxiliary_pdf_attachment,
     is_supplementary_pdf_attachment,
@@ -286,6 +287,7 @@ def sync(config_path: Path) -> int:
         data = attachment.get("data", {})
         parent_key = data.get("parentItem", "")
         parent = parents.get(parent_key, {})
+        parent_data = parent.get("data", {})
         previous = state["attachments"].get(attachment_key, {})
         try:
             source = source_path_for_attachment(api_base, attachment_key)
@@ -311,6 +313,10 @@ def sync(config_path: Path) -> int:
                 sha256 = previous.get("sha256") or file_sha256(destination)
                 unchanged += 1
 
+            journal_metrics = resolve_journal_metrics(
+                parent_data,
+                config.get("impact_factors", {}),
+            )
             entry = {
                 "active": True,
                 "attachment_key": attachment_key,
@@ -319,14 +325,15 @@ def sync(config_path: Path) -> int:
                 "creators": creator_names(parent),
                 "destination": str(destination.relative_to(vault)),
                 "destination_name": destination_name,
-                "doi": parent.get("data", {}).get("DOI", ""),
+                "doi": parent_data.get("DOI", ""),
+                **journal_metrics,
                 "parent_key": parent_key,
                 "sha256": sha256,
                 "source_filename": data.get("filename") or source.name,
                 "source_fingerprint": source_fingerprint,
                 "synced_at": previous.get("synced_at", synced_at),
                 "title": parent_title(parent),
-                "url": parent.get("data", {}).get("url", ""),
+                "url": parent_data.get("url", ""),
                 "year": parent_year(parent),
                 "zotero_select": f"zotero://select/library/items/{parent_key}",
             }

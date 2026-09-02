@@ -15,7 +15,9 @@
 - New source-specific notes under `wiki/papers/` and `wiki/experiments/` must use `status: draft`.
 - Paper draft filenames, level-one headings, and index aliases use `YYYY-MM-DD - First Author - Paper Title`.
 - Paper-note images live under `wiki/papers/images/<exact-note-stem>/`. Keep MinerU's complete extraction cache under `extracts/papers/assets/`; copy only selected, visually reviewed note assets into the paper-specific directory.
+- Optional Mode A notes live under `wiki/papers/close-reading/<exact-primary-note-filename>`. Start them only after a human checks `paragraph_reading` in the primary paper note. They share that paper's exact `images_dir`; `paragraph_reading_figures` is a separate human permission gate.
 - During paper ingest, write only the task's `note_path`, its exact `images_dir`, and the draft section of `wiki/index.md`.
+- During paragraph reading, write only the task's `paragraph_reading_note_path` and its already assigned `images_dir`; the deterministic runner alone updates selection/status properties on the primary note.
 - Do not update canonical knowledge pages from an unreviewed draft.
 - Integrate only a note explicitly marked `status: reviewed`; then mark it `status: integrated`.
 - Represent scientific contradictions as competing, conditioned claims.

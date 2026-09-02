@@ -16,6 +16,8 @@
   "paper_reading_skills": [
     "forge-paper-note"
   ],
+  "paragraph_reading_skill": "paper-reading",
+  "paragraph_reading_timeout_seconds": 3600,
   "pdf_extractor": "mineru",
   "pdftotext_path": "/path/to/pdftotext",
   "pdftotext_timeout_seconds": 180,

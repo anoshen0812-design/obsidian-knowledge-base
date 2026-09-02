@@ -24,6 +24,12 @@ module.exports = class ZoteroDocSyncPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "start-or-continue-paragraph-reading",
+      name: "开始或继续当前论文的逐段精读（Mode A）",
+      callback: () => this.startOrContinueParagraphReading(),
+    });
+
+    this.addCommand({
       id: "approve-and-integrate-current-note",
       name: "审核通过并整合当前知识笔记",
       callback: () => this.approveAndIntegrateCurrent(),
@@ -128,6 +134,36 @@ module.exports = class ZoteroDocSyncPlugin extends Plugin {
     return this.withLock(showNotice, "知识笔记生成", async () => {
       await this.runPipeline(["scan"]);
       await this.runPipeline(["ingest-next"]);
+    });
+  }
+
+  async startOrContinueParagraphReading() {
+    const file = this.app.workspace.getActiveFile();
+    if (!file || !/^wiki\/papers\/[^/]+\.md$/.test(file.path)) {
+      new Notice("请先打开 wiki/papers 下的主论文笔记");
+      return;
+    }
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+    if (frontmatter.paragraph_reading !== true && frontmatter.paragraph_reading !== "true") {
+      new Notice("请先在当前笔记属性中勾选 paragraph_reading");
+      return;
+    }
+
+    return this.withLock(true, "逐段精读", async () => {
+      await this.runPipeline(
+        ["paragraph-read", "--note", file.path],
+        65 * 60 * 1000
+      );
+      const companionPath = path.posix.join(
+        "wiki",
+        "papers",
+        "close-reading",
+        file.name
+      );
+      const companion = this.app.vault.getAbstractFileByPath(companionPath);
+      if (companion) {
+        await this.app.workspace.getLeaf("tab").openFile(companion);
+      }
     });
   }
 

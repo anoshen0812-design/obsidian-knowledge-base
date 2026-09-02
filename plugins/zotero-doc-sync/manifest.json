@@ -1,9 +1,9 @@
 {
   "id": "zotero-doc-sync",
   "name": "Zotero Doc Sync",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minAppVersion": "1.0.0",
-  "description": "Mirrors Zotero Doc PDFs and runs the reviewed, source-linked knowledge workflow.",
+  "description": "Mirrors Zotero Doc PDFs and runs Forge notes plus opt-in Mode A paragraph reading.",
   "author": "Local",
   "isDesktopOnly": true
 }

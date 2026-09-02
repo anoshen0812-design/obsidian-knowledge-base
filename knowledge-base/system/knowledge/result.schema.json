@@ -6,7 +6,7 @@
   "properties": {
     "operation": {
       "type": "string",
-      "enum": ["ingest", "integrate", "lint"]
+      "enum": ["ingest", "integrate", "lint", "paragraph-reading"]
     },
     "status": {
       "type": "string",

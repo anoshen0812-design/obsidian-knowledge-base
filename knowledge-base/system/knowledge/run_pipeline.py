@@ -22,7 +22,14 @@ from typing import Any, Dict, Iterable, List, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 PAPER_IMAGES_ROOT = Path("wiki") / "papers" / "images"
+PAPER_PARAGRAPH_READING_ROOT = Path("wiki") / "papers" / "close-reading"
 PAPER_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
+PAPER_READING_CONTROL_DEFAULTS = {
+    "paragraph_reading": False,
+    "paragraph_reading_figures": False,
+    "paragraph_reading_status": "not_requested",
+    "paragraph_reading_note": None,
+}
 
 
 def now_iso() -> str:
@@ -139,6 +146,19 @@ def paper_image_identity(note_path: str) -> Dict[str, str]:
     }
 
 
+def paper_paragraph_reading_identity(note_path: str) -> Dict[str, str]:
+    """Return the companion Mode A note path for one primary paper note."""
+
+    relative_note = Path(str(note_path))
+    if relative_note.parent != Path("wiki") / "papers" or relative_note.suffix.casefold() != ".md":
+        raise RuntimeError(f"Paragraph reading requires a primary wiki/papers note: {note_path}")
+    return {
+        "paragraph_reading_note_path": (
+            PAPER_PARAGRAPH_READING_ROOT / relative_note.name
+        ).as_posix()
+    }
+
+
 def load_config() -> Dict[str, Any]:
     config = read_json(CONFIG_PATH, None)
     if not isinstance(config, dict):
@@ -170,10 +190,26 @@ def ensure_paper_skills(config: Dict[str, Any]) -> List[str]:
         joined = ", ".join(missing)
         raise RuntimeError(
             f"Missing required paper-reading skills: {joined}. "
-            "Install the local Forge Paper Note skill at "
-            "$CODEX_HOME/skills/forge-paper-note/SKILL.md."
+            "Install each local skill under $CODEX_HOME/skills/<skill-name>/SKILL.md."
         )
     return skills
+
+
+def ensure_paragraph_reading_skill(config: Dict[str, Any]) -> str:
+    name = str(config.get("paragraph_reading_skill", "paper-reading")).strip()
+    if not re.fullmatch(r"[a-z0-9-]+", name):
+        raise RuntimeError(f"Invalid paragraph_reading_skill name: {name!r}")
+    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    skill_file = codex_home / "skills" / name / "SKILL.md"
+    if not skill_file.is_file():
+        raise RuntimeError(
+            f"Missing Mode A paragraph-reading skill: {name}. "
+            f"Expected {skill_file}."
+        )
+    skill_text = skill_file.read_text(encoding="utf-8", errors="ignore")
+    if "Mode A" not in skill_text or "Paragraph-by-Paragraph" not in skill_text:
+        raise RuntimeError(f"Local skill {name} does not declare the required Mode A workflow")
+    return name
 
 
 def ensure_forge_python(config: Dict[str, Any]) -> str:
@@ -407,6 +443,88 @@ def yaml_frontmatter_value(value: Any) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+def update_frontmatter_scalars(
+    note: Path,
+    updates: Dict[str, Any],
+    *,
+    only_missing: bool = False,
+) -> bool:
+    """Update top-level scalar properties while preserving the note body and lists."""
+
+    if not note.is_file():
+        return False
+    note_text = note.read_text(encoding="utf-8", errors="ignore")
+    match = re.match(r"\A---\s*\n(.*?)\n---(?P<tail>\s*\n|\Z)", note_text, flags=re.DOTALL)
+    if not match:
+        return False
+    lines = match.group(1).splitlines()
+    scalar_indexes: Dict[str, int] = {}
+    for index, line in enumerate(lines):
+        scalar = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$", line)
+        if scalar:
+            scalar_indexes[scalar.group(1)] = index
+
+    changed = False
+    for key, value in updates.items():
+        replacement = f"{key}: {yaml_frontmatter_value(value)}"
+        if key in scalar_indexes:
+            if only_missing:
+                continue
+            index = scalar_indexes[key]
+            if lines[index] != replacement:
+                lines[index] = replacement
+                changed = True
+        else:
+            scalar_indexes[key] = len(lines)
+            lines.append(replacement)
+            changed = True
+
+    if not changed:
+        return False
+    updated_frontmatter = "\n".join(lines)
+    updated = f"---\n{updated_frontmatter}\n---{match.group('tail')}{note_text[match.end():]}"
+    atomic_write_text(note, updated)
+    return True
+
+
+def ensure_paper_reading_controls(note: Path) -> bool:
+    """Expose human-owned Mode A switches without overwriting their choices."""
+
+    if not note.is_file():
+        return False
+    values = yaml_frontmatter_scalars(note.read_text(encoding="utf-8", errors="ignore"))
+    if unquote_yaml_scalar(values.get("type", "")) != "paper":
+        return False
+    return update_frontmatter_scalars(note, PAPER_READING_CONTROL_DEFAULTS, only_missing=True)
+
+
+def yaml_boolean(value: str) -> bool:
+    normalized = unquote_yaml_scalar(value).strip().casefold()
+    if normalized in {"true", "yes", "on", "1"}:
+        return True
+    if normalized in {"false", "no", "off", "0", "", "null", "~"}:
+        return False
+    raise RuntimeError(f"Expected a YAML checkbox value, got {value!r}")
+
+
+def paragraph_reading_preferences(note: Path) -> Dict[str, bool]:
+    values = yaml_frontmatter_scalars(note.read_text(encoding="utf-8", errors="ignore"))
+    if unquote_yaml_scalar(values.get("type", "")) != "paper":
+        raise RuntimeError("Paragraph reading can only start from a type: paper note")
+    if "paragraph_reading" not in values:
+        raise RuntimeError("Paper note is missing the paragraph_reading checkbox; run scan first")
+    if not yaml_boolean(values["paragraph_reading"]):
+        raise RuntimeError(
+            "paragraph_reading is not checked; enable it in the paper note properties first"
+        )
+    return {
+        "paragraph_reading": True,
+        "paragraph_reading_figures": yaml_boolean(
+            values.get("paragraph_reading_figures", "false")
+        ),
+    }
+
+
 def sync_paper_metadata_frontmatter(note: Path, metadata: Dict[str, Any]) -> bool:
     """Backfill managed paper metadata without disturbing note content."""
 
@@ -544,7 +662,9 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
                 refreshed += 1
             if candidate.get("kind") == "paper" and existing.get("note_path"):
                 note = vault / str(existing["note_path"])
-                if sync_paper_metadata_frontmatter(note, candidate):
+                metadata_changed = sync_paper_metadata_frontmatter(note, candidate)
+                controls_changed = ensure_paper_reading_controls(note)
+                if metadata_changed or controls_changed:
                     notes_refreshed += 1
             continue
         supersede_older(queue, candidate["source_identity"], candidate["id"])
@@ -570,7 +690,9 @@ def scan_sources(config: Dict[str, Any], include_inactive: bool = False) -> int:
             existing["metadata_updated_at"] = now_iso()
             normalized += 1
         paper_images_dir(config, existing, create=True)
-        if sync_paper_metadata_frontmatter(note, existing):
+        metadata_changed = sync_paper_metadata_frontmatter(note, existing)
+        controls_changed = ensure_paper_reading_controls(note)
+        if metadata_changed or controls_changed:
             notes_refreshed += 1
 
     if added or refreshed or normalized:
@@ -920,7 +1042,13 @@ def extract_pdf(config: Dict[str, Any], task: Dict[str, Any]) -> Path:
     return destination
 
 
-def codex_command(config: Dict[str, Any], prompt: str, result_name: str) -> subprocess.CompletedProcess:
+def codex_command(
+    config: Dict[str, Any],
+    prompt: str,
+    result_name: str,
+    *,
+    timeout_seconds: Optional[int] = None,
+) -> subprocess.CompletedProcess:
     vault = config["vault"]
     schema_path = SCRIPT_DIR / "result.schema.json"
     result_path = vault / "system" / "runtime" / f"{result_name}.json"
@@ -948,7 +1076,7 @@ def codex_command(config: Dict[str, Any], prompt: str, result_name: str) -> subp
         env=environment,
         stdin=subprocess.DEVNULL,
         text=True,
-        timeout=int(config.get("codex_timeout_seconds", 1200)),
+        timeout=int(timeout_seconds or config.get("codex_timeout_seconds", 1200)),
         cwd=str(vault),
     )
 
@@ -1037,6 +1165,60 @@ def validate_impact_factor_properties(note_text: str, task: Dict[str, Any]) -> N
             raise RuntimeError(f"Generated paper note invented {key} absent from task metadata")
 
 
+def validate_paper_reading_controls(note_text: str) -> None:
+    values = yaml_frontmatter_scalars(note_text)
+    missing = [key for key in PAPER_READING_CONTROL_DEFAULTS if key not in values]
+    if missing:
+        raise RuntimeError(
+            f"Generated paper note is missing paragraph-reading controls: {', '.join(missing)}"
+        )
+    yaml_boolean(values["paragraph_reading"])
+    yaml_boolean(values["paragraph_reading_figures"])
+
+
+def validate_paragraph_reading_note(
+    config: Dict[str, Any],
+    task: Dict[str, Any],
+    note_text: str,
+) -> str:
+    """Validate the durable Mode A companion note and return its progress state."""
+
+    values = yaml_frontmatter_scalars(note_text)
+    expected = {
+        "type": "paper-paragraph-reading",
+        "status": "draft",
+        "reading_mode": "A",
+        "source_note": f"[[{task['note_path']}]]",
+        "images_dir": str(task["images_dir"]),
+    }
+    for key, expected_value in expected.items():
+        actual = unquote_yaml_scalar(values.get(key, ""))
+        if actual != expected_value:
+            raise RuntimeError(
+                f"Mode A note {key} must equal {expected_value!r}; got {actual!r}"
+            )
+
+    include_figures = yaml_boolean(values.get("include_figures", "false"))
+    if include_figures != bool(task["paragraph_reading_figures"]):
+        raise RuntimeError("Mode A note include_figures does not match the human checkbox")
+    if not include_figures and note_image_targets(note_text):
+        raise RuntimeError("Mode A note embedded figures although paragraph_reading_figures is false")
+
+    progress = unquote_yaml_scalar(values.get("paragraph_reading_progress", ""))
+    if progress not in {"partial", "complete"}:
+        raise RuntimeError("Mode A note paragraph_reading_progress must be partial or complete")
+    expected_heading = f"# {task['display_title']}：逐段精读"
+    if not re.search(rf"(?m)^{re.escape(expected_heading)}\s*$", note_text):
+        raise RuntimeError("Mode A note has the wrong level-one heading")
+    if not re.search(r"(?m)^## 逐段精读\s*$", note_text):
+        raise RuntimeError("Mode A note is missing the paragraph-by-paragraph reading section")
+    if not re.search(r"(?m)^>\s+\S", note_text):
+        raise RuntimeError("Mode A note contains no blockquoted source paragraph")
+
+    validate_paper_image_contract(config, task, note_text)
+    return progress
+
+
 def ingest_next(config: Dict[str, Any]) -> int:
     with pipeline_lock(config):
         queue = load_queue(config)
@@ -1085,12 +1267,15 @@ def ingest_next(config: Dict[str, Any]) -> int:
                 raise RuntimeError(f"Source-of-truth file changed during ingest: {task['source_path']}")
             if not note.is_file():
                 raise RuntimeError(f"Codex did not create {task['note_path']}")
+            if task["kind"] == "paper":
+                ensure_paper_reading_controls(note)
             note_text = note.read_text(encoding="utf-8", errors="ignore")
             note_head = note_text[:2000]
             if not re.search(r"(?m)^status:\s*['\"]?draft['\"]?\s*$", note_head):
                 raise RuntimeError(f"Generated note is not marked status: draft: {task['note_path']}")
             if task["kind"] == "paper":
                 validate_impact_factor_properties(note_text, task)
+                validate_paper_reading_controls(note_text)
                 validate_paper_image_contract(config, task, note_text)
                 expected_heading = f"# {task['display_title']}"
                 if not re.search(rf"(?m)^{re.escape(expected_heading)}\s*$", note_text):
@@ -1132,6 +1317,152 @@ def ingest_next(config: Dict[str, Any]) -> int:
             set_task_failure(task, str(error))
             save_queue(config, queue)
             log(f"ingest failed id={task['id']} error={error}")
+            return 1
+
+
+def vault_relative_note(config: Dict[str, Any], note_value: str) -> tuple[Path, str]:
+    vault = config["vault"].resolve()
+    supplied = Path(note_value).expanduser()
+    note = supplied.resolve() if supplied.is_absolute() else (vault / supplied).resolve()
+    try:
+        relative = note.relative_to(vault).as_posix()
+    except ValueError as error:
+        raise RuntimeError("Note must be inside the configured vault") from error
+    return note, relative
+
+
+def paragraph_read_paper(config: Dict[str, Any], note_value: str) -> int:
+    """Run or continue human-opted-in paragraph reading with paper-reading Mode A."""
+
+    with pipeline_lock(config):
+        note, relative = vault_relative_note(config, note_value)
+        if Path(relative).parent != Path("wiki") / "papers" or not note.is_file():
+            raise RuntimeError(
+                "Paragraph reading must start from an existing primary note directly under wiki/papers"
+            )
+        ensure_paper_reading_controls(note)
+        preferences = paragraph_reading_preferences(note)
+
+        queue = load_queue(config)
+        matches = [
+            item
+            for item in queue["items"]
+            if item.get("kind") == "paper" and item.get("note_path") == relative
+        ]
+        if not matches:
+            raise RuntimeError("No paper queue task matches the selected note; run scan first")
+        task = matches[-1]
+        task.update(paper_image_identity(relative))
+        task.update(paper_paragraph_reading_identity(relative))
+        task["paragraph_reading_mode"] = "A"
+        task["paragraph_reading_figures"] = preferences["paragraph_reading_figures"]
+        task["paragraph_reading_status"] = "running"
+        task["paragraph_reading_updated_at"] = now_iso()
+        if not task.get("display_title"):
+            task["display_title"] = note.stem
+
+        skill_name = ensure_paragraph_reading_skill(config)
+        paper_images_dir(config, task, create=True)
+        extract_path = extract_pdf(config, task)
+        task["extract_path"] = str(extract_path.relative_to(config["vault"]))
+        source = config["vault"] / str(task["source_path"])
+        if not source.is_file() or file_sha256(source) != task["sha256"]:
+            raise RuntimeError(f"Source PDF does not match its queued hash: {task['source_path']}")
+
+        companion = config["vault"] / str(task["paragraph_reading_note_path"])
+        update_frontmatter_scalars(
+            note,
+            {
+                "paragraph_reading_status": "running",
+                "paragraph_reading_note": f"[[{task['paragraph_reading_note_path']}]]",
+                "paragraph_reading_updated_at": now_iso(),
+            },
+        )
+        save_queue(config, queue)
+        log(
+            f"paragraph reading start id={task['id']} figures={task['paragraph_reading_figures']}"
+        )
+
+        workflow = config["vault"] / "system" / "workflows" / "paragraph-reading.md"
+        figure_instruction = (
+            "The human explicitly enabled figure/table analysis. Visually inspect only relevant "
+            "figures and store any new selected assets in TASK_JSON.images_dir."
+            if task["paragraph_reading_figures"]
+            else "The human did not enable figure/table analysis. Completely ignore figures and tables; "
+            "do not reference, analyze, or embed them."
+        )
+        prompt = (
+            "执行人工选择论文的逐段精读任务。严格读取并遵守 AGENTS.md 与 "
+            f"{workflow.relative_to(config['vault'])}。必须使用 ${skill_name} 的 MODE A；"
+            "阅读模式、全文范围、输出中文和图表偏好已经由人工在笔记属性中确认，不要再次提问。"
+            "只读主论文笔记、extract_path、source_path 和必要的上下文；不得修改原始资料、主论文笔记、"
+            "队列文件或知识页。只可写 paragraph_reading_note_path 与该论文原有 images_dir。"
+            f"{figure_instruction} 若一次无法覆盖全文，诚实标记 partial 并保存精确续读点；"
+            "下次运行必须从该点继续，不能重复或假装完成。\n\n"
+            f"TASK_JSON:\n{json.dumps(task, ensure_ascii=False, indent=2)}"
+        )
+
+        try:
+            result = codex_command(
+                config,
+                prompt,
+                f"last-paragraph-reading-{safe_stem(task['id'])}",
+                timeout_seconds=int(config.get("paragraph_reading_timeout_seconds", 3600)),
+            )
+            run_log = write_run_log(config, "paragraph-reading", task["id"], result)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    result.stderr.strip() or result.stdout.strip() or "Codex paragraph reading failed"
+                )
+            if not source.is_file() or file_sha256(source) != task["sha256"]:
+                raise RuntimeError(f"Source-of-truth file changed during reading: {task['source_path']}")
+            if not companion.is_file():
+                raise RuntimeError(
+                    f"Codex did not create paragraph-reading note {task['paragraph_reading_note_path']}"
+                )
+            companion_text = companion.read_text(encoding="utf-8", errors="ignore")
+            progress = validate_paragraph_reading_note(config, task, companion_text)
+            state = "completed" if progress == "complete" else "partial"
+            timestamp = now_iso()
+            main_updates: Dict[str, Any] = {
+                "paragraph_reading_status": state,
+                "paragraph_reading_note": f"[[{task['paragraph_reading_note_path']}]]",
+                "paragraph_reading_updated_at": timestamp,
+            }
+            if state == "completed":
+                main_updates["paragraph_reading_completed_at"] = timestamp
+            update_frontmatter_scalars(note, main_updates)
+            task["paragraph_reading_status"] = state
+            task["paragraph_reading_attempts"] = int(task.get("paragraph_reading_attempts", 0)) + 1
+            task["paragraph_reading_last_run_log"] = str(run_log.relative_to(config["vault"]))
+            task["paragraph_reading_updated_at"] = timestamp
+            save_queue(config, queue)
+            append_log(
+                config["vault"] / "system" / "ingest-log.md",
+                f"paragraph reading ({state}) | {task.get('title', task['id'])}",
+                f"- Paper: `[[{relative}]]`\n"
+                f"- Mode A note: `[[{task['paragraph_reading_note_path']}]]`\n"
+                f"- Figures enabled: `{str(task['paragraph_reading_figures']).lower()}`",
+            )
+            log(
+                f"paragraph reading {state} note={task['paragraph_reading_note_path']}"
+            )
+            return 0
+        except Exception as error:
+            timestamp = now_iso()
+            update_frontmatter_scalars(
+                note,
+                {
+                    "paragraph_reading_status": "failed",
+                    "paragraph_reading_updated_at": timestamp,
+                },
+            )
+            task["paragraph_reading_status"] = "failed"
+            task["paragraph_reading_attempts"] = int(task.get("paragraph_reading_attempts", 0)) + 1
+            task["paragraph_reading_last_error"] = str(error)[-4000:]
+            task["paragraph_reading_updated_at"] = timestamp
+            save_queue(config, queue)
+            log(f"paragraph reading failed id={task['id']} error={error}")
             return 1
 
 
@@ -1226,10 +1557,26 @@ def retry_failed(config: Dict[str, Any]) -> int:
 def show_status(config: Dict[str, Any]) -> int:
     queue = load_queue(config)
     counts: Dict[str, int] = {}
+    paragraph_reading_counts: Dict[str, int] = {}
     for item in queue["items"]:
         status = item.get("status", "unknown")
         counts[status] = counts.get(status, 0) + 1
-    print(json.dumps({"counts": counts, "total": len(queue["items"])}, ensure_ascii=False, sort_keys=True))
+        reading_status = item.get("paragraph_reading_status")
+        if reading_status:
+            paragraph_reading_counts[reading_status] = (
+                paragraph_reading_counts.get(reading_status, 0) + 1
+            )
+    print(
+        json.dumps(
+            {
+                "counts": counts,
+                "paragraph_reading_counts": paragraph_reading_counts,
+                "total": len(queue["items"]),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -1239,6 +1586,11 @@ def main() -> int:
     scan_parser = subparsers.add_parser("scan", help="Queue new or changed sources")
     scan_parser.add_argument("--include-inactive", action="store_true")
     subparsers.add_parser("ingest-next", help="Draft the oldest pending source")
+    paragraph_parser = subparsers.add_parser(
+        "paragraph-read",
+        help="Start or continue Mode A for one human-selected paper note",
+    )
+    paragraph_parser.add_argument("--note", required=True)
     integrate_parser = subparsers.add_parser("integrate", help="Integrate one reviewed draft")
     integrate_parser.add_argument("--note", required=True)
     subparsers.add_parser("lint", help="Generate a wiki health report")
@@ -1253,6 +1605,8 @@ def main() -> int:
             return 0
         if args.command == "ingest-next":
             return ingest_next(config)
+        if args.command == "paragraph-read":
+            return paragraph_read_paper(config, args.note)
         if args.command == "integrate":
             return integrate_note(config, args.note)
         if args.command == "lint":

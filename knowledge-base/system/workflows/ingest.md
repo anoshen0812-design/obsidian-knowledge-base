@@ -49,6 +49,10 @@ supporting_information:
   - "[[sources/literature/si/PARENT/example.pdf]]"
 supporting_information_used: []
 images_dir: "wiki/papers/images/YYYY-MM-DD - First Author - Source title"
+paragraph_reading: false
+paragraph_reading_figures: false
+paragraph_reading_status: "not_requested"
+paragraph_reading_note: null
 year: "2026"
 journal: "Journal title"
 issn: "0000-0000"
@@ -64,6 +68,11 @@ phenomena: []
 generated_at: "ISO timestamp"
 ---
 ```
+
+`paragraph_reading` and `paragraph_reading_figures` are human-owned Obsidian
+checkboxes. Always initialize them to `false`, but preserve their existing values
+when regenerating a draft. The optional Mode A workflow starts only after the human
+checks `paragraph_reading` and explicitly runs the paragraph-reading command.
 
 Every paper note must contain `impact_factor`, `impact_factor_year`,
 `impact_factor_source`, and `impact_factor_retrieved_at`. Copy them exactly
